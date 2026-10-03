@@ -17,4 +17,5 @@ class MetricDaily(Base):
     clicks = Column(Integer, default=0)
     spend = Column(Float, default=0.0)
     sales = Column(Float, default=0.0)
+    organic_sales = Column(Float, default=0.0)
     orders = Column(Integer, default=0)

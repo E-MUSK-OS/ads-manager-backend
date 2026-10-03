@@ -7,6 +7,14 @@ from app.models.user import User
 from app.schemas.user import UserCreate, UserResponse, Token
 from app.core.security import get_password_hash, verify_password, create_access_token, create_refresh_token
 from app.dependencies import get_current_user
+from pydantic import BaseModel
+from google.oauth2 import id_token
+from google.auth.transport import requests as google_requests
+import requests
+from app.config import settings
+
+class GoogleAuth(BaseModel):
+    id_token: str
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -37,6 +45,49 @@ async def login(form_data: OAuth2PasswordRequestForm = Depends(), db: AsyncSessi
             headers={"WWW-Authenticate": "Bearer"},
         )
     
+    access_token = create_access_token(subject=user.id)
+    refresh_token = create_refresh_token(subject=user.id)
+    
+    return {"access_token": access_token, "refresh_token": refresh_token, "token_type": "bearer"}
+
+@router.post("/google", response_model=Token)
+async def google_auth(data: GoogleAuth, db: AsyncSession = Depends(get_db)):
+    try:
+        idinfo = id_token.verify_oauth2_token(
+            data.id_token, google_requests.Request(), settings.GOOGLE_OAUTH_CLIENT_ID
+        )
+    except ValueError:
+        resp = requests.get(f"https://www.googleapis.com/oauth2/v3/userinfo?access_token={data.id_token}")
+        if resp.status_code == 200:
+            idinfo = resp.json()
+        else:
+            raise HTTPException(status_code=401, detail="Invalid Google token")
+
+    email = idinfo.get("email")
+    google_id = idinfo.get("sub")
+    if not email or not google_id:
+        raise HTTPException(status_code=400, detail="Token missing required fields")
+
+    result = await db.execute(select(User).where(User.email == email))
+    user = result.scalars().first()
+
+    if user:
+        if not user.google_id:
+            user.google_id = google_id
+            if not user.hashed_password:
+                user.auth_provider = "google"
+            await db.commit()
+    else:
+        user = User(
+            email=email,
+            hashed_password=None,
+            google_id=google_id,
+            auth_provider="google"
+        )
+        db.add(user)
+        await db.commit()
+        await db.refresh(user)
+
     access_token = create_access_token(subject=user.id)
     refresh_token = create_refresh_token(subject=user.id)
     

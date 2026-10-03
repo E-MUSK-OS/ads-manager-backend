@@ -33,7 +33,7 @@ class MockAdsProvider(AdsProvider):
                 self.db.add(ag)
                 await self.db.flush()
                 for k in range(5):
-                    kw = Keyword(ad_group_id=ag.id, keyword_text=f"keyword {j} {k}", external_id=f"mock_kw_{ag.id}_{k}")
+                    kw = Keyword(ad_group_id=ag.id, keyword_text=f"keyword {j} {k}", external_id=f"mock_kw_{ag.id}_{k}", match_type="EXACT")
                     self.db.add(kw)
         await self.db.commit()
 
@@ -52,12 +52,13 @@ class MockAdsProvider(AdsProvider):
             for c in campaigns:
                 m = MetricDaily(
                     date=d,
-                    entity_type="CAMPAIGN",
+                    entity_type="campaign",
                     entity_id=c.id,
                     impressions=random.randint(100, 1000),
                     clicks=random.randint(10, 100),
                     spend=random.uniform(5.0, 50.0),
-                    sales=random.uniform(10.0, 200.0)
+                    sales=random.uniform(10.0, 200.0),
+                    organic_sales=random.uniform(20.0, 500.0)
                 )
                 self.db.add(m)
         await self.db.commit()

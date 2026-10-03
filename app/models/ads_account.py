@@ -1,4 +1,5 @@
-from sqlalchemy import Column, String, Integer, ForeignKey, Boolean
+from sqlalchemy import Column, String, Integer, ForeignKey, Boolean, DateTime
+from sqlalchemy.sql import func
 from sqlalchemy.orm import relationship
 from app.database import Base
 
@@ -10,5 +11,7 @@ class AdsAccount(Base):
     profile_id = Column(String, unique=True, index=True)
     marketplace = Column(String)
     is_active = Column(Boolean, default=True)
+    is_mock = Column(Boolean, default=False)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
 
     user = relationship("User", backref="ads_accounts")

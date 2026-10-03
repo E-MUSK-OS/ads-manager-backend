@@ -15,6 +15,7 @@ class Settings(BaseSettings):
     JWT_SECRET_KEY: str
     JWT_ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
     JWT_REFRESH_TOKEN_EXPIRE_DAYS: int = 30
+    GOOGLE_OAUTH_CLIENT_ID: Optional[str] = None
 
     # Amazon Ads API
     AMAZON_LWA_CLIENT_ID: Optional[str] = None
