@@ -6,7 +6,7 @@ class AutomationRule(Base):
     __tablename__ = "automation_rules"
 
     id = Column(Integer, primary_key=True, index=True)
-    ads_account_id = Column(Integer, ForeignKey("ads_accounts.id"), nullable=False)
+    ads_account_id = Column(Integer, ForeignKey("ads_accounts.id", ondelete="CASCADE"), nullable=False, index=True)
     name = Column(String, nullable=False)
     metric = Column(String, nullable=False)  # e.g., ACOS, ROAS
     operator = Column(String, nullable=False) # e.g., GREATER_THAN, LESS_THAN

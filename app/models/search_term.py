@@ -8,9 +8,9 @@ class SearchTerm(Base):
     id = Column(Integer, primary_key=True, index=True)
     date = Column(Date, nullable=False, index=True)
     search_term = Column(String, index=True, nullable=False)
-    campaign_id = Column(Integer, ForeignKey("campaigns.id"), nullable=False)
-    ad_group_id = Column(Integer, ForeignKey("ad_groups.id"), nullable=False)
-    keyword_id = Column(Integer, ForeignKey("keywords.id"), nullable=False)
+    campaign_id = Column(Integer, ForeignKey("campaigns.id", ondelete="CASCADE"), nullable=False, index=True)
+    ad_group_id = Column(Integer, ForeignKey("ad_groups.id", ondelete="CASCADE"), nullable=False, index=True)
+    keyword_id = Column(Integer, ForeignKey("keywords.id", ondelete="CASCADE"), nullable=False, index=True)
     
     clicks = Column(Integer, default=0)
     impressions = Column(Integer, default=0)

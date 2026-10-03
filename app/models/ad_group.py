@@ -6,7 +6,7 @@ class AdGroup(Base):
     __tablename__ = "ad_groups"
 
     id = Column(Integer, primary_key=True, index=True)
-    campaign_id = Column(Integer, ForeignKey("campaigns.id"), nullable=False)
+    campaign_id = Column(Integer, ForeignKey("campaigns.id", ondelete="CASCADE"), nullable=False, index=True)
     external_id = Column(String, index=True)
     name = Column(String, nullable=False)
     state = Column(String, default="ENABLED")

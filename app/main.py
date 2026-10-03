@@ -5,7 +5,15 @@ import logging
 
 logging.basicConfig(level=logging.INFO)
 
-app = FastAPI(title="Amazon Ads Management Platform API")
+from contextlib import asynccontextmanager
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    yield
+
+app = FastAPI(title="Amazon Ads Management Platform API", lifespan=lifespan)
 
 import os
 
@@ -18,6 +26,18 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+from fastapi import Request
+from fastapi.responses import JSONResponse
+import traceback
+
+@app.exception_handler(Exception)
+async def unhandled_exception_handler(request: Request, exc: Exception):
+    logging.error(f"Unhandled error on {request.method} {request.url}:\n{traceback.format_exc()}")
+    return JSONResponse(
+        status_code=500,
+        content={"detail": "Internal server error"},
+    )
 
 from app.routers import auth, ads_accounts, campaigns, metrics, ai, billing, ad_groups, keywords, search_terms, automation_rules
 

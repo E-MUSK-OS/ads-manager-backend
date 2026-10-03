@@ -1,8 +1,12 @@
-from sqlalchemy import Column, Integer, ForeignKey, Float, Date, String
+from sqlalchemy import Column, Integer, ForeignKey, Float, Date, String, UniqueConstraint, CheckConstraint
 from app.database import Base
 
 class MetricDaily(Base):
     __tablename__ = "metrics_daily"
+    __table_args__ = (
+        CheckConstraint("entity_type IN ('campaign', 'ad_group', 'keyword')", name="check_entity_type"),
+        UniqueConstraint("entity_type", "entity_id", "date", name="uix_metric_daily")
+    )
 
     id = Column(Integer, primary_key=True, index=True)
     entity_type = Column(String, nullable=False) # CAMPAIGN, AD_GROUP, KEYWORD, SEARCH_TERM

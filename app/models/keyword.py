@@ -6,7 +6,7 @@ class Keyword(Base):
     __tablename__ = "keywords"
 
     id = Column(Integer, primary_key=True, index=True)
-    ad_group_id = Column(Integer, ForeignKey("ad_groups.id"), nullable=False)
+    ad_group_id = Column(Integer, ForeignKey("ad_groups.id", ondelete="CASCADE"), nullable=False, index=True)
     external_id = Column(String, index=True)
     keyword_text = Column(String, nullable=False)
     match_type = Column(String, nullable=False) # EXACT, PHRASE, BROAD
