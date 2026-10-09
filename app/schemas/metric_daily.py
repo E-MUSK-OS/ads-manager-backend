@@ -11,5 +11,8 @@ class MetricDailyResponse(BaseModel):
     clicks: int
     spend: float
     sales: float
+    orders: int
+    organic_sales: float
+
     
     model_config = ConfigDict(from_attributes=True)

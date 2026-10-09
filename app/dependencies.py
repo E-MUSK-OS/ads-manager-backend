@@ -29,3 +29,28 @@ async def get_current_user(token: str = Depends(oauth2_scheme), db: AsyncSession
     if user is None:
         raise credentials_exception
     return user
+
+from app.models.ads_account import AdsAccount
+from app.models.campaign import Campaign
+from app.models.ad_group import AdGroup
+
+async def assert_owned_account(db: AsyncSession, account_id: int, user: User) -> AdsAccount:
+    acc = (await db.execute(select(AdsAccount).where(
+        AdsAccount.id == account_id, AdsAccount.user_id == user.id))).scalars().first()
+    if not acc:
+        raise HTTPException(404, "Ads account not found")
+    return acc
+
+async def load_owned_campaign(db: AsyncSession, campaign_id: int, user: User) -> Campaign:
+    c = (await db.execute(select(Campaign).join(AdsAccount).where(
+        Campaign.id == campaign_id, AdsAccount.user_id == user.id))).scalars().first()
+    if not c:
+        raise HTTPException(404, "Campaign not found")
+    return c
+
+async def load_owned_ad_group(db: AsyncSession, ad_group_id: int, user: User) -> AdGroup:
+    ag = (await db.execute(select(AdGroup).join(Campaign).join(AdsAccount).where(
+        AdGroup.id == ad_group_id, AdsAccount.user_id == user.id))).scalars().first()
+    if not ag:
+        raise HTTPException(404, "Ad group not found")
+    return ag

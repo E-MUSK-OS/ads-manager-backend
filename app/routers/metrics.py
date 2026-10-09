@@ -11,5 +11,21 @@ router = APIRouter(prefix="/metrics", tags=["metrics"])
 
 @router.get("", response_model=list[MetricDailyResponse])
 async def get_metrics(db: AsyncSession = Depends(get_db), current_user: User = Depends(get_current_user)):
-    result = await db.execute(select(MetricDaily).limit(100))
+    from app.models.campaign import Campaign
+    from app.models.ads_account import AdsAccount
+    from datetime import date, timedelta
+    
+    thirty_days_ago = date.today() - timedelta(days=30)
+    
+    query = (
+        select(MetricDaily)
+        .join(Campaign, Campaign.id == MetricDaily.entity_id)
+        .join(AdsAccount, AdsAccount.id == Campaign.ads_account_id)
+        .where(
+            AdsAccount.user_id == current_user.id,
+            MetricDaily.entity_type == "campaign",
+            MetricDaily.date >= thirty_days_ago
+        )
+    )
+    result = await db.execute(query)
     return result.scalars().all()

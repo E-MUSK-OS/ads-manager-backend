@@ -20,6 +20,10 @@ from app.database import Base
 from app.models.user import User
 from app.models.ads_account import AdsAccount
 from app.models.campaign import Campaign
+from app.models.campaign_product import CampaignProduct
+from app.models.negative_keyword import NegativeKeyword
+from app.models.target import Target
+from app.models.user_campaign_settings import UserCampaignSettings
 from app.models.ad_group import AdGroup
 from app.models.keyword import Keyword
 from app.models.search_term import SearchTerm
@@ -27,6 +31,8 @@ from app.models.metric_daily import MetricDaily
 from app.models.automation_rule import AutomationRule
 from app.models.ai_suggestion import AiSuggestion
 from app.models.ai_chat_message import AiChatMessage
+from app.models.product import Product
+from app.models.product_review import ProductReview
 from app.config import settings
 
 target_metadata = Base.metadata

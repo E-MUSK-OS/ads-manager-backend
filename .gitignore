@@ -11,3 +11,10 @@ wheels/
 .env
 .env.*
 !.env.example
+
+# Logs and databases
+*.db
+*.log
+
+*.db
+*.log
