@@ -83,10 +83,9 @@ def setup_auth_override():
 
 @pytest_asyncio.fixture
 async def client_a(user_a: User):
-    def override_get_db():
-        session = TestingSessionLocal()
-        try: yield session
-        finally: pass
+    async def override_get_db():
+        async with TestingSessionLocal() as session:
+            yield session
         
     app.dependency_overrides[get_db] = override_get_db
     
@@ -97,10 +96,9 @@ async def client_a(user_a: User):
 
 @pytest_asyncio.fixture
 async def client_b(user_b: User):
-    def override_get_db():
-        session = TestingSessionLocal()
-        try: yield session
-        finally: pass
+    async def override_get_db():
+        async with TestingSessionLocal() as session:
+            yield session
         
     app.dependency_overrides[get_db] = override_get_db
     

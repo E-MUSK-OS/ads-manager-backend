@@ -1,7 +1,8 @@
 from pydantic import BaseModel, Field, field_validator, model_validator
 from typing import Optional, Literal
 from datetime import date
-from app.core.marketplace_rules import KEYWORD_MAX_LEN, KEYWORD_MAX_WORDS, KEYWORD_FORBIDDEN
+import re
+from app.core.marketplace_rules import KEYWORD_MAX_LEN, KEYWORD_MAX_WORDS, KEYWORD_FORBIDDEN, ASIN_RE
 
 BiddingStrategy = Literal["LEGACY_FOR_SALES", "AUTO_FOR_SALES", "MANUAL"]
 MatchType = Literal["EXACT", "PHRASE", "BROAD"]
@@ -35,6 +36,15 @@ class TargetIn(BaseModel):
     value: str
     bid: float | None = None
 
+    @field_validator("value")
+    def validate_target_value(cls, v, info):
+        kind = info.data.get("kind")
+        if kind == "ASIN":
+            v = v.strip().upper()
+            if not re.match(ASIN_RE, v):
+                raise ValueError("ASIN must be 10 alphanumeric characters")
+        return v
+
 class AdGroupIn(BaseModel):
     name: str = Field(min_length=1, max_length=128)
     default_bid: float
@@ -52,6 +62,7 @@ class CampaignCreate(BaseModel):
     daily_budget: float
     target_acos: float | None = Field(None, gt=0, le=1000)
     bidding_strategy: BiddingStrategy = "AUTO_FOR_SALES"
+    site: Literal["AMAZON_AND_BEYOND", "AMAZON_BUSINESS"] = "AMAZON_AND_BEYOND"
     placement_top_pct: int = Field(0, ge=0, le=900)
     placement_rest_pct: int = Field(0, ge=0, le=900)
     placement_product_page_pct: int = Field(0, ge=0, le=900)
@@ -59,6 +70,30 @@ class CampaignCreate(BaseModel):
     ad_groups: list[AdGroupIn] = Field(min_length=1, max_length=1)
     negative_keywords: list[NegativeKeywordIn] = []
     negative_asins: list[str] = []
+    negative_brands: list[str] = []
+
+    @field_validator("negative_asins")
+    def validate_negative_asins(cls, v):
+        cleaned: list[str] = []
+        for raw in v:
+            a = raw.strip().upper()
+            if not re.match(ASIN_RE, a):
+                raise ValueError("ASIN must be 10 alphanumeric characters")
+            if a not in cleaned:
+                cleaned.append(a)
+        return cleaned
+
+    @field_validator("negative_brands")
+    def validate_negative_brands(cls, v):
+        cleaned: list[str] = []
+        for raw in v:
+            b = " ".join(raw.strip().split())
+            if not b or len(b) > 80:
+                raise ValueError("Brand name must be 1–80 characters")
+            key = b.lower()
+            if key not in {c.lower() for c in cleaned}:
+                cleaned.append(b)
+        return cleaned
 
     @model_validator(mode='after')
     def validate_dates(self):
@@ -91,6 +126,7 @@ class CampaignResponse(BaseModel):
     state: str
     targeting_type: str
     campaign_type: str
+    site: str = "AMAZON_AND_BEYOND"
     start_date: date
     end_date: date | None
     daily_budget: float
@@ -103,14 +139,86 @@ class CampaignResponse(BaseModel):
     class Config:
         from_attributes = True
 
+HEALTH_METRIC_ALLOWLIST = {
+    "acos", "roas", "spend", "sales", "orders", "clicks", "impressions",
+    "ctr", "cpc", "cvr", "budget_utilization", "age_days", "spend_without_sales"
+}
+
+class HealthRuleCondition(BaseModel):
+    metric: str
+    op: Literal[">", ">=", "<", "<=", "=="]
+    value: float | int | Literal["@target_acos"]
+
+    @field_validator("metric")
+    def validate_metric(cls, v):
+        if v not in HEALTH_METRIC_ALLOWLIST:
+            raise ValueError(f"Unknown metric '{v}'. Allowed: {', '.join(sorted(HEALTH_METRIC_ALLOWLIST))}")
+        return v
+
+class HealthRule(BaseModel):
+    key: str = Field(min_length=1, max_length=32)
+    name: str = Field(min_length=1, max_length=24)
+    color: Literal["red", "amber", "green", "blue", "slate"] = "slate"
+    enabled: bool = True
+    match: Literal["ALL", "ANY"] = "ALL"
+    conditions: list[HealthRuleCondition] = Field(min_length=1, max_length=4)
+
 class UserCampaignSettingsResponse(BaseModel):
     acos_low: float
     acos_high: float
     default_target_acos: float
-    bid_limit_acos: float | None
+    bid_limit_acos: float | None = None
+    health_rules: list[HealthRule] | None = None
+
+    class Config:
+        from_attributes = True
 
 class UserCampaignSettingsUpdate(BaseModel):
-    acos_low: float
-    acos_high: float
-    default_target_acos: float
-    bid_limit_acos: float | None = None
+    acos_low: float = Field(ge=0, le=1000)
+    acos_high: float = Field(ge=0, le=1000)
+    default_target_acos: float = Field(gt=0, le=1000)
+    bid_limit_acos: float | None = Field(None, gt=0, le=1000)
+    health_rules: list[HealthRule] | None = Field(None, max_length=12)
+
+    @model_validator(mode="after")
+    def validate_thresholds(self):
+        if self.acos_low >= self.acos_high:
+            raise ValueError("acos_low must be strictly less than acos_high")
+        return self
+
+
+class BidSuggestionKeywordIn(BaseModel):
+    keyword_text: str
+    match_type: MatchType = "BROAD"
+
+    @field_validator("keyword_text")
+    def validate_keyword(cls, v):
+        return clean_keyword_text(v)
+
+
+class BidSuggestionsRequest(BaseModel):
+    ads_account_id: int
+    product_ids: list[int] = []
+    keywords: list[BidSuggestionKeywordIn] = []
+
+
+class ForecastRequest(BaseModel):
+    ads_account_id: int
+    product_ids: list[int] = []
+    daily_budget: float | None = None
+    default_bid: float | None = None
+    targeting_type: Literal["AUTO", "MANUAL"] | None = None
+    target_count: int | None = None
+
+
+class ProductLookupRequest(BaseModel):
+    ads_account_id: int
+    asins: list[str] = Field(max_length=500)
+
+
+class CampaignCreateResult(BaseModel):
+    id: int
+    name: str
+    state: str
+    status_label: str
+    warnings: list = []

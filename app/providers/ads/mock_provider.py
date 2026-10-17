@@ -39,6 +39,9 @@ class MockAdsProvider(AdsProvider):
     def generate_asin(self):
         return "B0" + "".join(random.choices(string.ascii_uppercase + string.digits, k=8))
 
+    def generate_sku(self):
+        return "SKU-" + "".join(random.choices(string.ascii_uppercase + string.digits, k=6))
+
     async def generate_for_new_connection(self, ads_account_id: int):
         account = (await self.db.execute(select(AdsAccount).where(AdsAccount.id == ads_account_id))).scalars().first()
         rules = MARKETPLACE_RULES[account.marketplace]
@@ -50,6 +53,7 @@ class MockAdsProvider(AdsProvider):
             p = Product(
                 ads_account_id=ads_account_id,
                 asin=self.generate_asin(),
+                sku=self.generate_sku(),
                 title=f"Mock Product {i} Premium",
                 image_url=f"https://via.placeholder.com/150?text=Product+{i}",
                 category=categories[i % len(categories)],
@@ -213,3 +217,30 @@ class MockAdsProvider(AdsProvider):
             for i in range(0, len(rows), chunk_size):
                 await self.db.execute(insert(MetricDaily), rows[i:i+chunk_size])
             await self.db.commit()
+
+    def search_brands(self, q: str = "") -> list[str]:
+        fictional_brands = [
+            "ApexStyle", "AuraCraft", "BoldWave", "BreezeLiving", "BrightNova",
+            "CoreFusion", "CozyNest", "CrestPeak", "EchoPulse", "Elementix",
+            "EverGlow", "FlowState", "FrontierGoods", "FusionWear", "GlideGear",
+            "HavenPure", "HorizonPro", "IgniteWorks", "InfinityCraft", "IronClad",
+            "LuminaLife", "LunaBloom", "ModernHaven", "MotionTech", "NexusPrime",
+            "NovaForge", "OasisHome", "OmniFit", "PeakForm", "PolarisSupply",
+            "PrismWorks", "PulseActive", "QuantumLiving", "RadiantRoots", "SolaceGear",
+            "SummitLine", "TerraVibe", "TrueNorth", "UrbanCraft", "ZenithSupply"
+        ]
+        q_clean = q.strip().lower()
+        if not q_clean:
+            return fictional_brands
+        return [b for b in fictional_brands if q_clean in b.lower()]
+
+    @staticmethod
+    def suggest_bid(text: str, default_bid: float, rules: dict) -> dict:
+        import hashlib
+        h = int(hashlib.md5(text.encode()).hexdigest()[:8], 16) % 100 / 100
+        median = min(max(default_bid * (0.6 + 0.9 * h), rules["min_bid"]), rules["max_bid"])
+        return {
+            "low": round(max(rules["min_bid"], median * 0.7), 2),
+            "median": round(median, 2),
+            "high": round(min(rules["max_bid"], median * 1.4), 2)
+        }

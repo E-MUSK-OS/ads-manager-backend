@@ -8,3 +8,7 @@ class AdsProvider(ABC):
     @abstractmethod
     async def sync_account_data(self, ads_account_id: int):
         pass
+
+    @abstractmethod
+    def search_brands(self, q: str = "") -> list[str]:
+        pass

@@ -33,6 +33,7 @@ from app.models.ai_suggestion import AiSuggestion
 from app.models.ai_chat_message import AiChatMessage
 from app.models.product import Product
 from app.models.product_review import ProductReview
+from app.models.campaign_draft import CampaignDraft
 from app.config import settings
 
 target_metadata = Base.metadata

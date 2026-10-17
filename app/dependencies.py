@@ -33,6 +33,7 @@ async def get_current_user(token: str = Depends(oauth2_scheme), db: AsyncSession
 from app.models.ads_account import AdsAccount
 from app.models.campaign import Campaign
 from app.models.ad_group import AdGroup
+from app.models.keyword import Keyword
 
 async def assert_owned_account(db: AsyncSession, account_id: int, user: User) -> AdsAccount:
     acc = (await db.execute(select(AdsAccount).where(
@@ -54,3 +55,10 @@ async def load_owned_ad_group(db: AsyncSession, ad_group_id: int, user: User) ->
     if not ag:
         raise HTTPException(404, "Ad group not found")
     return ag
+
+async def load_owned_keyword(db: AsyncSession, keyword_id: int, user: User) -> Keyword:
+    kw = (await db.execute(select(Keyword).join(AdGroup).join(Campaign).join(AdsAccount).where(
+        Keyword.id == keyword_id, AdsAccount.user_id == user.id))).scalars().first()
+    if not kw:
+        raise HTTPException(404, "Keyword not found")
+    return kw

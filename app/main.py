@@ -30,6 +30,25 @@ from fastapi.responses import JSONResponse
 import traceback
 from app.core.exceptions import ServiceValidationError
 
+from fastapi.exceptions import RequestValidationError
+
+@app.exception_handler(RequestValidationError)
+async def request_validation_exception_handler(request: Request, exc: RequestValidationError):
+    errors = []
+    for err in exc.errors():
+        loc = err.get("loc", [])
+        field = ".".join(str(x) for x in loc[1:]) if len(loc) > 1 else str(loc[0]) if loc else ""
+        errors.append({"field": field, "message": str(err.get("msg", "Invalid value"))})
+    headers = {}
+    origin = request.headers.get("origin")
+    if origin in origins:
+        headers = {"Access-Control-Allow-Origin": origin, "Access-Control-Allow-Credentials": "true", "Vary": "Origin"}
+    return JSONResponse(
+        status_code=422,
+        content={"detail": errors},
+        headers=headers
+    )
+
 @app.exception_handler(ServiceValidationError)
 async def service_validation_exception_handler(request: Request, exc: ServiceValidationError):
     headers = {}
@@ -55,7 +74,7 @@ async def unhandled_exception_handler(request: Request, exc: Exception):
         headers=headers
     )
 
-from app.routers import auth, ads_accounts, campaigns, metrics, ai, billing, ad_groups, keywords, search_terms, automation_rules, products
+from app.routers import auth, ads_accounts, campaigns, metrics, ai, billing, ad_groups, keywords, search_terms, automation_rules, products, campaign_drafts
 
 app.include_router(auth.router)
 app.include_router(ads_accounts.router)
@@ -68,6 +87,7 @@ app.include_router(keywords.router)
 app.include_router(search_terms.router)
 app.include_router(automation_rules.router)
 app.include_router(products.router)
+app.include_router(campaign_drafts.router)
 # Startup event removed
 
 @app.get("/health")

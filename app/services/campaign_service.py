@@ -13,7 +13,7 @@ from app.models.negative_keyword import NegativeKeyword
 from app.models.product import Product
 from app.schemas.campaign import CampaignCreate
 from app.core.exceptions import ServiceValidationError
-from app.core.marketplace_rules import today_for, MARKETPLACE_RULES
+from app.core.marketplace_rules import today_for, MARKETPLACE_RULES, marketplace_or_us
 
 async def validate_create(db: AsyncSession, account: AdsAccount, rules: dict, payload: CampaignCreate):
     errors = []
@@ -49,7 +49,16 @@ async def validate_create(db: AsyncSession, account: AdsAccount, rules: dict, pa
             continue
         p = next(p for p in products if p.id == pid)
         if p.price is None:
-            errors.append({"field": f"product_ids", "message": f"Product {pid} must have a price"})
+            errors.append({"field": "product_ids", "message": f"Product {pid} must have a price"})
+
+    advertised_asins = {p.asin.upper() for p in products if p.asin}
+    for idx, asin in enumerate(payload.negative_asins):
+        if asin in advertised_asins:
+            errors.append({"field": f"negative_asins.{idx}", "message": "Cannot exclude an ASIN you are advertising"})
+    if payload.ad_groups:
+        for idx, t in enumerate(payload.ad_groups[0].targets):
+            if t.kind == "ASIN" and t.value.upper() in advertised_asins:
+                errors.append({"field": f"ad_groups.0.targets.{idx}.value", "message": "A target ASIN may not be one of the advertised products"})
             
     # Check cannibalisation
     if not errors and payload.product_ids:
@@ -124,7 +133,7 @@ async def validate_create(db: AsyncSession, account: AdsAccount, rules: dict, pa
     return errors, warnings
 
 async def create_campaign(db: AsyncSession, account: AdsAccount, payload: CampaignCreate):
-    rules = MARKETPLACE_RULES[account.marketplace]
+    rules = marketplace_or_us(account.marketplace)
     errors, warnings = await validate_create(db, account, rules, payload)
     if errors:
         raise ServiceValidationError(errors)
@@ -142,6 +151,7 @@ async def create_campaign(db: AsyncSession, account: AdsAccount, payload: Campai
             daily_budget=payload.daily_budget,
             target_acos=payload.target_acos,
             bidding_strategy=payload.bidding_strategy,
+            site=payload.site,
             placement_top_pct=payload.placement_top_pct,
             placement_rest_pct=payload.placement_rest_pct,
             placement_product_page_pct=payload.placement_product_page_pct,
@@ -184,27 +194,40 @@ async def create_campaign(db: AsyncSession, account: AdsAccount, payload: Campai
                 db.add(nkw)
                 
             for asin in payload.negative_asins:
-                # Assuming negative ASINs are targets with kind="NEGATIVE_ASIN"
                 ntg = Target(ad_group_id=ag.id, kind="NEGATIVE_ASIN", value=asin)
+                db.add(ntg)
+
+            for brand in payload.negative_brands:
+                ntg = Target(ad_group_id=ag.id, kind="NEGATIVE_BRAND", value=brand)
                 db.add(ntg)
         
         await db.commit()
     except Exception as e:
         await db.rollback()
         raise e
-        
-    return await load_detail(db, c.id, warnings)
+
+    today = today_for(account.marketplace)
+    status_label = payload.state
+    if payload.state == "ENABLED":
+        if payload.start_date > today:
+            status_label = "SCHEDULED"
+        elif payload.end_date and payload.end_date < today:
+            status_label = "ENDED"
+
+    return {
+        "id": c.id,
+        "name": c.name,
+        "state": c.state,
+        "status_label": status_label,
+        "warnings": warnings or [],
+    }
+
 
 async def load_detail(db: AsyncSession, campaign_id: int, warnings: list = None):
-    # Load campaign details to return
     result = await db.execute(
         select(Campaign).options(
             selectinload(Campaign.product)
         ).where(Campaign.id == campaign_id)
     )
     c = result.scalars().first()
-    # To keep response simple and matching CampaignResponse
-    res = c.__dict__
-    if warnings:
-        res["warnings"] = warnings
     return c

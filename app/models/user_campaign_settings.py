@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, ForeignKey, Float
+from sqlalchemy import Column, Integer, ForeignKey, Float, JSON
 from app.database import Base
 
 class UserCampaignSettings(Base):
@@ -10,3 +10,4 @@ class UserCampaignSettings(Base):
     acos_high = Column(Float, default=90.0, nullable=False)
     default_target_acos = Column(Float, default=30.0, nullable=False)
     bid_limit_acos = Column(Float, nullable=True)
+    health_rules = Column(JSON, nullable=True)

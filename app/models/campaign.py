@@ -11,7 +11,9 @@ class Campaign(Base):
         CheckConstraint("placement_top_pct >= 0 AND placement_top_pct <= 900", name="ck_campaign_placement_top"),
         CheckConstraint("placement_rest_pct >= 0 AND placement_rest_pct <= 900", name="ck_campaign_placement_rest"),
         CheckConstraint("placement_product_page_pct >= 0 AND placement_product_page_pct <= 900", name="ck_campaign_placement_product_page"),
-        CheckConstraint("state IN ('ENABLED', 'PAUSED', 'ARCHIVED')", name="ck_campaign_state")
+        CheckConstraint("state IN ('ENABLED', 'PAUSED', 'ARCHIVED')", name="ck_campaign_state"),
+        # Mock-only attribute; mapping to the real Amazon Ads API is unverified.
+        CheckConstraint("site IN ('AMAZON_AND_BEYOND', 'AMAZON_BUSINESS')", name="ck_campaign_site"),
     )
 
     id = Column(Integer, primary_key=True, index=True)
@@ -22,6 +24,7 @@ class Campaign(Base):
     daily_budget = Column(Float, default=10.0)
     targeting_type = Column(String, default="MANUAL")
     campaign_type = Column(String, default="SPONSORED_PRODUCTS")
+    site = Column(String, nullable=False, server_default="AMAZON_AND_BEYOND")
     product_id = Column(Integer, ForeignKey("products.id", ondelete="SET NULL"), nullable=True, index=True)
 
     start_date = Column(Date, nullable=False, server_default=func.current_date())

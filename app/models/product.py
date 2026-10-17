@@ -11,6 +11,7 @@ class Product(Base):
     id = Column(Integer, primary_key=True, index=True)
     ads_account_id = Column(Integer, ForeignKey("ads_accounts.id", ondelete="CASCADE"), nullable=False, index=True)
     asin = Column(String, nullable=False, index=True)
+    sku = Column(String, nullable=True, index=True)
     title = Column(String, nullable=False)
     image_url = Column(String, nullable=True)
     category = Column(String, nullable=True)

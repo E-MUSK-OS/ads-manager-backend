@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func, text, literal
+from sqlalchemy import select, func, text, literal, or_
 from typing import List, Optional
 from datetime import date, timedelta
 
@@ -16,23 +16,180 @@ from app.models.ad_group import AdGroup
 from app.models.keyword import Keyword
 from app.models.negative_keyword import NegativeKeyword
 from app.models.ads_account import AdsAccount
+from app.dependencies import get_current_user, assert_owned_account
+from app.schemas.campaign import ProductLookupRequest
 from app.core.marketplace_rules import today_for
 
 router = APIRouter(prefix="/products", tags=["products"])
 
-@router.get("")
-async def list_products(
+@router.get("/search")
+async def search_products(
+    ads_account_id: int,
+    q: Optional[str] = None,
+    targeting_type: Optional[str] = None,
+    sort: str = "relevance",
+    page: int = 1,
+    page_size: int = 12,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    # Fetch all products + aggregate metrics for the account
-    # We'll use a single query with outerjoin
-    
-    # First get the first account to know marketplace today
-    account_res = await db.execute(select(AdsAccount).where(AdsAccount.user_id == current_user.id).limit(1))
-    account = account_res.scalars().first()
-    if not account:
-        return []
+    account = await assert_owned_account(db, ads_account_id, current_user)
+    today = today_for(account.marketplace)
+    thirty_days_ago = today - timedelta(days=30)
+
+    # 30-day sales subquery for relevance sorting
+    sales_subq = (
+        select(
+            CampaignProduct.product_id,
+            func.coalesce(func.sum(MetricDaily.sales), 0.0).label("sales_30d")
+        )
+        .join(Campaign, CampaignProduct.campaign_id == Campaign.id)
+        .join(MetricDaily, MetricDaily.entity_id == Campaign.id)
+        .where(MetricDaily.entity_type == "campaign", MetricDaily.date >= thirty_days_ago)
+        .group_by(CampaignProduct.product_id)
+        .subquery()
+    )
+
+    base_query = (
+        select(Product, func.coalesce(sales_subq.c.sales_30d, 0.0).label("sales_30d"))
+        .outerjoin(sales_subq, Product.id == sales_subq.c.product_id)
+        .where(Product.ads_account_id == account.id)
+    )
+
+    if q and q.strip():
+        search_pattern = f"%{q.strip().lower()}%"
+        base_query = base_query.where(
+            or_(
+                func.lower(Product.title).like(search_pattern),
+                func.lower(Product.asin).like(search_pattern),
+                func.lower(Product.sku).like(search_pattern),
+            )
+        )
+
+    # Count total
+    count_sq = base_query.subquery()
+    total_count = (await db.execute(select(func.count()).select_from(count_sq))).scalar() or 0
+
+    # Sort
+    if sort == "price_asc":
+        base_query = base_query.order_by(Product.price.asc())
+    elif sort == "price_desc":
+        base_query = base_query.order_by(Product.price.desc())
+    elif sort == "rating":
+        base_query = base_query.order_by(Product.rating_avg.desc(), Product.review_count.desc())
+    else:  # relevance = 30-day sales desc then review_count desc
+        base_query = base_query.order_by(sales_subq.c.sales_30d.desc().nullslast(), Product.review_count.desc())
+
+    offset = max(0, (page - 1) * page_size)
+    paginated_query = base_query.offset(offset).limit(page_size)
+    results = (await db.execute(paginated_query)).all()
+
+    p_list = [r[0] for r in results]
+    counts_map = {}
+    if p_list:
+        cp_query = (
+            select(CampaignProduct.product_id, func.count(Campaign.id))
+            .join(Campaign, CampaignProduct.campaign_id == Campaign.id)
+            .where(Campaign.state == "ENABLED", CampaignProduct.product_id.in_([p.id for p in p_list]))
+        )
+        if targeting_type:
+            cp_query = cp_query.where(Campaign.targeting_type == targeting_type)
+        cp_query = cp_query.group_by(CampaignProduct.product_id)
+        counts_map = dict((await db.execute(cp_query)).all())
+
+    items = []
+    for p in p_list:
+        eligible = p.price is not None and p.price > 0
+        ineligible_reason = None if eligible else "Product is missing a valid price"
+        items.append({
+            "id": p.id,
+            "asin": p.asin,
+            "sku": p.sku,
+            "title": p.title,
+            "image_url": p.image_url,
+            "category": p.category,
+            "price": p.price,
+            "rating_avg": p.rating_avg or 0.0,
+            "review_count": p.review_count or 0,
+            "eligible": eligible,
+            "ineligible_reason": ineligible_reason,
+            "active_campaign_count": counts_map.get(p.id, 0),
+        })
+
+    return {
+        "items": items,
+        "total_count": total_count,
+        "page": page,
+        "page_size": page_size
+    }
+
+@router.post("/lookup")
+async def lookup_products(
+    payload: ProductLookupRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    account = await assert_owned_account(db, payload.ads_account_id, current_user)
+    asins_or_skus = [x.strip() for x in payload.asins if x.strip()]
+    if not asins_or_skus:
+        return {"found": [], "not_found": []}
+
+    upper_inputs = [x.upper() for x in asins_or_skus]
+    products = (await db.execute(
+        select(Product).where(
+            Product.ads_account_id == account.id,
+            or_(
+                func.upper(Product.asin).in_(upper_inputs),
+                func.upper(Product.sku).in_(upper_inputs)
+            )
+        )
+    )).scalars().all()
+
+    found_asins_skus = set()
+    found_items = []
+    for p in products:
+        eligible = p.price is not None and p.price > 0
+        ineligible_reason = None if eligible else "Product is missing a valid price"
+        found_items.append({
+            "id": p.id,
+            "asin": p.asin,
+            "sku": p.sku,
+            "title": p.title,
+            "image_url": p.image_url,
+            "category": p.category,
+            "price": p.price,
+            "rating_avg": p.rating_avg or 0.0,
+            "review_count": p.review_count or 0,
+            "eligible": eligible,
+            "ineligible_reason": ineligible_reason,
+            "active_campaign_count": 0,
+        })
+        if p.asin:
+            found_asins_skus.add(p.asin.upper())
+        if p.sku:
+            found_asins_skus.add(p.sku.upper())
+
+    not_found = [raw for raw in asins_or_skus if raw.upper() not in found_asins_skus]
+
+    return {
+        "found": found_items,
+        "not_found": not_found
+    }
+
+@router.get("")
+async def list_products(
+    ads_account_id: Optional[int] = None,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    # Fetch products + aggregate metrics
+    if ads_account_id:
+        account = await assert_owned_account(db, ads_account_id, current_user)
+    else:
+        account_res = await db.execute(select(AdsAccount).where(AdsAccount.user_id == current_user.id).limit(1))
+        account = account_res.scalars().first()
+        if not account:
+            return []
 
     # Get aggregated metrics per product via campaigns
     metrics_subq = (
@@ -48,12 +205,16 @@ async def list_products(
         .subquery()
     )
 
-    result = await db.execute(
+    query = (
         select(Product, metrics_subq.c.spend, metrics_subq.c.sales)
         .outerjoin(metrics_subq, Product.id == metrics_subq.c.product_id)
         .join(AdsAccount, Product.ads_account_id == AdsAccount.id)
         .where(AdsAccount.user_id == current_user.id)
     )
+    if ads_account_id:
+        query = query.where(Product.ads_account_id == account.id)
+
+    result = await db.execute(query)
     
     response = []
     for p, spend, sales in result:
@@ -64,6 +225,7 @@ async def list_products(
         response.append({
             "id": p.id,
             "asin": p.asin,
+            "sku": p.sku,
             "title": p.title,
             "image_url": p.image_url,
             "category": p.category,

@@ -8,7 +8,7 @@ from app.models.user import User
 from app.models.ads_account import AdsAccount
 from app.schemas.ads_account import AdsAccountResponse
 from app.providers.ads.mock_provider import MockAdsProvider
-from app.core.marketplace_rules import MARKETPLACE_RULES
+from app.core.marketplace_rules import MARKETPLACE_RULES, marketplace_or_us
 
 router = APIRouter(prefix="/ads-accounts", tags=["ads-accounts"])
 
@@ -43,7 +43,7 @@ async def list_accounts(db: AsyncSession = Depends(get_db), current_user: User =
 @router.get("/{account_id}/rules")
 async def get_account_rules(account_id: int, db: AsyncSession = Depends(get_db), current_user: User = Depends(get_current_user)):
     account = await assert_owned_account(db, account_id, current_user)
-    return MARKETPLACE_RULES[account.marketplace]
+    return marketplace_or_us(account.marketplace)
 
 @router.post("/{account_id}/sync")
 async def sync_account(account_id: int, db: AsyncSession = Depends(get_db), current_user: User = Depends(get_current_user)):
