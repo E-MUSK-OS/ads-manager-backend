@@ -50,5 +50,11 @@ async def sync_account(account_id: int, db: AsyncSession = Depends(get_db), curr
     account = await assert_owned_account(db, account_id, current_user)
     provider = MockAdsProvider(db)
     await provider.sync_account_data(account.id)
+    try:
+        from app.recommendations.engine import run_engine
+        await run_engine(db, account, trigger="sync")
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).warning("Failed to run recommendations on sync: %s", e)
     return {"status": "ok"}
 

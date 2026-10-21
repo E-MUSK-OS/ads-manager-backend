@@ -74,7 +74,7 @@ async def unhandled_exception_handler(request: Request, exc: Exception):
         headers=headers
     )
 
-from app.routers import auth, ads_accounts, campaigns, metrics, ai, billing, ad_groups, keywords, search_terms, automation_rules, products, campaign_drafts
+from app.routers import auth, ads_accounts, campaigns, metrics, ai, billing, ad_groups, keywords, search_terms, automation_rules, products, campaign_drafts, recommendation_rules, recommendations
 
 app.include_router(auth.router)
 app.include_router(ads_accounts.router)
@@ -88,6 +88,8 @@ app.include_router(search_terms.router)
 app.include_router(automation_rules.router)
 app.include_router(products.router)
 app.include_router(campaign_drafts.router)
+app.include_router(recommendation_rules.router)
+app.include_router(recommendations.router)
 # Startup event removed
 
 @app.get("/health")

@@ -10,6 +10,7 @@ class SearchTermBase(BaseModel):
     impressions: int = 0
     spend: float = 0.0
     sales: float = 0.0
+    orders: int = 0
 
 class SearchTermResponse(SearchTermBase):
     id: int

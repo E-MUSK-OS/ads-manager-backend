@@ -34,6 +34,10 @@ from app.models.ai_chat_message import AiChatMessage
 from app.models.product import Product
 from app.models.product_review import ProductReview
 from app.models.campaign_draft import CampaignDraft
+from app.models.recommendation_rule import RecommendationRule, RecommendationRuleCampaign
+from app.models.recommendation import Recommendation
+from app.models.recommendation_run import RecommendationRun
+from app.models.placement_metric_daily import PlacementMetricDaily
 from app.config import settings
 
 target_metadata = Base.metadata

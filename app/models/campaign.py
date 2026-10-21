@@ -39,4 +39,5 @@ class Campaign(Base):
 
     account = relationship("AdsAccount", backref="campaigns")
     product = relationship("Product", backref="campaigns")
+    rule_campaigns = relationship("RecommendationRuleCampaign", cascade="all, delete-orphan", back_populates="campaign")
 

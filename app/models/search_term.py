@@ -16,6 +16,7 @@ class SearchTerm(Base):
     impressions = Column(Integer, default=0)
     spend = Column(Float, default=0.0)
     sales = Column(Float, default=0.0)
+    orders = Column(Integer, default=0, server_default="0", nullable=False)
 
     campaign = relationship("Campaign")
     ad_group = relationship("AdGroup")

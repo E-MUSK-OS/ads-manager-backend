@@ -6,6 +6,7 @@ class Settings(BaseSettings):
     ADS_PROVIDER: str = "mock"
     LLM_PROVIDER: str = "claude"
     FRONTEND_URL: str = "http://localhost:3000"
+    RECOMMENDATION_ENGINE: str = "rules"
 
     # Database
     DATABASE_URL: str

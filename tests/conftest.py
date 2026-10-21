@@ -12,11 +12,20 @@ from app.models.user import User
 from app.models.ads_account import AdsAccount
 from app.models.product import Product
 
+from sqlalchemy import event
+
 engine = create_async_engine(
     "sqlite+aiosqlite://", 
     connect_args={"check_same_thread": False},
     poolclass=StaticPool,
 )
+
+@event.listens_for(engine.sync_engine, "connect")
+def set_sqlite_pragma(dbapi_connection, connection_record):
+    cursor = dbapi_connection.cursor()
+    cursor.execute("PRAGMA foreign_keys=ON")
+    cursor.close()
+
 TestingSessionLocal = sessionmaker(bind=engine, class_=AsyncSession, expire_on_commit=False)
 
 @pytest_asyncio.fixture(autouse=True)
