@@ -32,7 +32,7 @@ async def chat(message: str, db: AsyncSession = Depends(get_db), current_user: U
         total_sales = totals.get("sales") or 0.0
         acos = totals.get("acos") or 0.0
         
-        context = f"User has connected account ID {account.id}. They have {len(campaigns)} campaigns. Total spend: ${total_spend:.2f}, Total sales: ${total_sales:.2f}, ACOS: {acos:.1f}%."
+        context = f"User has connected account ID {account.id}. They have {len(campaigns)} campaigns. Total spend: ₹{total_spend:.2f}, Total sales: ₹{total_sales:.2f}, ACOS: {acos:.1f}%."
     provider = ClaudeProvider()
     response = await provider.chat([{"role": "user", "content": message}], context)
     return {"response": response}
