@@ -38,6 +38,7 @@ from app.models.recommendation_rule import RecommendationRule, RecommendationRul
 from app.models.recommendation import Recommendation
 from app.models.recommendation_run import RecommendationRun
 from app.models.placement_metric_daily import PlacementMetricDaily
+from app.models.campaign_history import CampaignHistory
 from app.config import settings
 
 target_metadata = Base.metadata

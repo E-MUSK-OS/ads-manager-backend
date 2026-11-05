@@ -9,21 +9,106 @@ from app.models.metric_daily import MetricDaily
 from app.models.user_campaign_settings import UserCampaignSettings
 from app.models.ads_account import AdsAccount
 
-def derive(m: dict) -> dict:
-    imp = float(m.get("impressions") or 0)
-    clk = float(m.get("clicks") or 0)
-    spend = float(m.get("spend") or 0)
-    sales = float(m.get("sales") or 0)
-    orders = float(m.get("orders") or 0)
-    organic = float(m.get("organic_sales") or 0)
+def derive(
+    impressions_or_dict: int | dict = 0,
+    clicks: int = 0,
+    spend: float = 0.0,
+    sales: float = 0.0,
+    orders: int = 0,
+    **kwargs
+) -> dict:
+    if isinstance(impressions_or_dict, dict):
+        m = impressions_or_dict
+        imp = int(m.get("impressions") or 0)
+        clk = int(m.get("clicks") or 0)
+        spd = round(float(m.get("spend") or 0.0), 2)
+        sls = round(float(m.get("sales") or 0.0), 2)
+        ord_cnt = int(m.get("orders") or 0)
+        organic = float(m.get("organic_sales") or 0.0)
+    else:
+        imp = int(impressions_or_dict or 0)
+        clk = int(clicks or 0)
+        spd = round(float(spend or 0.0), 2)
+        sls = round(float(sales or 0.0), 2)
+        ord_cnt = int(orders or 0)
+        organic = float(kwargs.get("organic_sales") or 0.0)
+
+    ctr = round((clk / imp) * 100.0, 2) if imp > 0 else 0.0
+    cpc = round(spd / clk, 2) if clk > 0 else 0.0
+    cvr = round((ord_cnt / clk) * 100.0, 2) if clk > 0 else 0.0
+    roas = round(sls / spd, 2) if spd > 0 else 0.0
+    acos = round((spd / sls) * 100.0, 2) if sls > 0 else None
+    acos_is_infinite = bool(spd > 0.0 and sls == 0.0)
+
+    res = {
+        "impressions": imp,
+        "clicks": clk,
+        "spend": spd,
+        "sales": sls,
+        "orders": ord_cnt,
+        "ctr": ctr,
+        "cpc": cpc,
+        "cvr": cvr,
+        "roas": roas,
+        "acos": acos,
+        "acos_is_infinite": acos_is_infinite,
+    }
+    if organic or (isinstance(impressions_or_dict, dict) and "organic_sales" in impressions_or_dict):
+        res["organic_sales"] = organic
+        res["tacos"] = round(spd / (sls + organic) * 100.0, 2) if (sls + organic) > 0 else None
+    if isinstance(impressions_or_dict, dict):
+        for k, v in impressions_or_dict.items():
+            if k not in res:
+                res[k] = v
+    return res
+
+def compute_period_deltas(current: dict, previous: dict) -> dict:
+    def _calc_pct(curr: float, prev: float) -> float:
+        if prev > 0:
+            return round(((curr - prev) / prev) * 100.0, 2)
+        return 100.0 if curr > 0 else 0.0
+
+    curr_spd = float(current.get("spend") or 0.0)
+    prev_spd = float(previous.get("spend") or 0.0)
+
+    curr_sls = float(current.get("sales") or 0.0)
+    prev_sls = float(previous.get("sales") or 0.0)
+
+    curr_roas = float(current.get("roas") or 0.0)
+    prev_roas = float(previous.get("roas") or 0.0)
+
+    curr_imp = int(current.get("impressions") or 0)
+    prev_imp = int(previous.get("impressions") or 0)
+
+    curr_clk = int(current.get("clicks") or 0)
+    prev_clk = int(previous.get("clicks") or 0)
+
+    curr_cpc = float(current.get("cpc") or 0.0)
+    prev_cpc = float(previous.get("cpc") or 0.0)
+
+    curr_ord = int(current.get("orders") or 0)
+    prev_ord = int(previous.get("orders") or 0)
+
+    curr_acos = current.get("acos")
+    prev_acos = previous.get("acos")
+
+    curr_ctr = float(current.get("ctr") or 0.0)
+    prev_ctr = float(previous.get("ctr") or 0.0)
+
+    curr_cvr = float(current.get("cvr") or 0.0)
+    prev_cvr = float(previous.get("cvr") or 0.0)
+
     return {
-        **m,
-        "ctr": clk / imp * 100 if imp else None,
-        "cpc": spend / clk if clk else None,
-        "cvr": orders / clk * 100 if clk else None,
-        "acos": spend / sales * 100 if sales else None,
-        "roas": sales / spend if spend else None,
-        "tacos": spend / (sales + organic) * 100 if (sales + organic) else None,
+        "spend_delta_pct": _calc_pct(curr_spd, prev_spd),
+        "sales_delta_pct": _calc_pct(curr_sls, prev_sls),
+        "roas_delta_pct": _calc_pct(curr_roas, prev_roas),
+        "impressions_delta_pct": _calc_pct(curr_imp, prev_imp),
+        "clicks_delta_pct": _calc_pct(curr_clk, prev_clk),
+        "cpc_delta_pct": _calc_pct(curr_cpc, prev_cpc),
+        "orders_delta_pct": _calc_pct(curr_ord, prev_ord),
+        "acos_delta_pts": round(curr_acos - prev_acos, 2) if (curr_acos is not None and prev_acos is not None) else None,
+        "ctr_delta_pts": round(curr_ctr - prev_ctr, 2),
+        "cvr_delta_pts": round(curr_cvr - prev_cvr, 2),
     }
 
 def get_default_health_rules(acos_high: float = 90.0) -> list[dict]:

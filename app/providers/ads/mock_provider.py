@@ -75,27 +75,14 @@ def split_campaign_metrics_to_placements(
     orders: int,
     noise_seed: int | None = None,
 ) -> dict[str, dict[str, Any]]:
-    rnd = random.Random(noise_seed) if noise_seed is not None else random
+    # Split across TOP_OF_SEARCH (45%), REST_OF_SEARCH (35%), PRODUCT_PAGES (20%)
+    weights = [0.45, 0.35, 0.20]
 
-    # Base split e.g. 45 / 35 / 20 % with noise
-    n1 = rnd.uniform(0.42, 0.48)
-    n2 = rnd.uniform(0.32, 0.38)
-    n3 = rnd.uniform(0.18, 0.22)
-    imp_weights = [n1, n2, n3]
-
-    # Clicks with noise
-    clk_weights = [n1 * rnd.uniform(1.0, 1.15), n2 * rnd.uniform(0.9, 1.0), n3 * rnd.uniform(0.85, 0.95)]
-    spend_weights = clk_weights
-
-    # Top of search converting best: higher share of orders and sales
-    ord_weights = [0.60 * rnd.uniform(0.9, 1.1), 0.25 * rnd.uniform(0.9, 1.1), 0.15 * rnd.uniform(0.9, 1.1)]
-    sales_weights = ord_weights
-
-    split_imps = largest_remainder_split_int(impressions, imp_weights)
-    split_clks = largest_remainder_split_int(clicks, clk_weights)
-    split_spend = split_money_last_remainder(spend, spend_weights)
-    split_orders = largest_remainder_split_int(orders, ord_weights)
-    split_sales = split_money_last_remainder(sales, sales_weights)
+    split_imps = largest_remainder_split_int(impressions, weights)
+    split_clks = largest_remainder_split_int(clicks, weights)
+    split_spend = split_money_last_remainder(spend, weights)
+    split_orders = largest_remainder_split_int(orders, weights)
+    split_sales = split_money_last_remainder(sales, weights)
 
     placements = ["TOP_OF_SEARCH", "REST_OF_SEARCH", "PRODUCT_PAGES"]
     res = {}
@@ -141,32 +128,180 @@ class MockAdsProvider(AdsProvider):
             products.append(p)
         await self.db.commit()
 
+        campaign_configs = [
+            {
+                "name": "Mock Winning Bestseller Campaign 0 (MANUAL)",
+                "campaign_type": "SPONSORED_PRODUCTS",
+                "targeting_type": "MANUAL",
+                "portfolio_name": "Bestsellers",
+                "daily_budget": 2500.0,
+                "bidding_strategy": "UP_AND_DOWN",
+                "top_pct": 50,
+                "product_pct": 25,
+                "rest_pct": 0,
+                "state": "ENABLED",
+                "delivery_status": "DELIVERING",
+                "profile": "winning",
+            },
+            {
+                "name": "Mock Winning Festive Auto Campaign 1 (AUTO)",
+                "campaign_type": "SPONSORED_PRODUCTS",
+                "targeting_type": "AUTO",
+                "portfolio_name": "Festive Sale",
+                "daily_budget": 3000.0,
+                "bidding_strategy": "UP_AND_DOWN",
+                "top_pct": 40,
+                "product_pct": 20,
+                "rest_pct": 0,
+                "state": "ENABLED",
+                "delivery_status": "DELIVERING",
+                "profile": "winning",
+            },
+            {
+                "name": "Mock Bleeding New Launches Campaign 2 (MANUAL)",
+                "campaign_type": "SPONSORED_PRODUCTS",
+                "targeting_type": "MANUAL",
+                "portfolio_name": "New Launches",
+                "daily_budget": 1000.0,
+                "bidding_strategy": "DOWN_ONLY",
+                "top_pct": 0,
+                "product_pct": 0,
+                "rest_pct": 0,
+                "state": "ENABLED",
+                "delivery_status": "DELIVERING",
+                "profile": "bleeding",
+            },
+            {
+                "name": "Mock Bleeding Festive Brands Campaign 3 (MANUAL)",
+                "campaign_type": "SPONSORED_BRANDS",
+                "targeting_type": "MANUAL",
+                "portfolio_name": "Festive Sale",
+                "daily_budget": 800.0,
+                "bidding_strategy": "DOWN_ONLY",
+                "top_pct": 0,
+                "product_pct": 0,
+                "rest_pct": 0,
+                "state": "ENABLED",
+                "delivery_status": "DELIVERING",
+                "profile": "bleeding",
+            },
+            {
+                "name": "Mock Out of Budget Campaign 4 (MANUAL)",
+                "campaign_type": "SPONSORED_PRODUCTS",
+                "targeting_type": "MANUAL",
+                "portfolio_name": "Bestsellers",
+                "daily_budget": 500.0,
+                "bidding_strategy": "DOWN_ONLY",
+                "top_pct": 20,
+                "product_pct": 10,
+                "rest_pct": 0,
+                "state": "ENABLED",
+                "delivery_status": "OUT_OF_BUDGET",
+                "profile": "out_of_budget",
+            },
+            {
+                "name": "Mock Paused Display Campaign 5 (MANUAL)",
+                "campaign_type": "SPONSORED_DISPLAY",
+                "targeting_type": "MANUAL",
+                "portfolio_name": "New Launches",
+                "daily_budget": 1200.0,
+                "bidding_strategy": "FIXED",
+                "top_pct": 0,
+                "product_pct": 0,
+                "rest_pct": 0,
+                "state": "PAUSED",
+                "delivery_status": "PAUSED",
+                "profile": "paused",
+            },
+            {
+                "name": "Mock Archived Campaign 6 (MANUAL)",
+                "campaign_type": "SPONSORED_PRODUCTS",
+                "targeting_type": "MANUAL",
+                "portfolio_name": "Festive Sale",
+                "daily_budget": 1500.0,
+                "bidding_strategy": "DOWN_ONLY",
+                "top_pct": 0,
+                "product_pct": 0,
+                "rest_pct": 0,
+                "state": "ARCHIVED",
+                "delivery_status": "ARCHIVED",
+                "profile": "ended",
+            },
+            {
+                "name": "Mock Leaking Campaign 7 (MANUAL)",
+                "campaign_type": "SPONSORED_PRODUCTS",
+                "targeting_type": "MANUAL",
+                "portfolio_name": "Bestsellers",
+                "daily_budget": 1500.0,
+                "bidding_strategy": "DOWN_ONLY",
+                "top_pct": 10,
+                "product_pct": 0,
+                "rest_pct": 0,
+                "state": "ENABLED",
+                "delivery_status": "DELIVERING",
+                "profile": "leaking",
+            },
+            {
+                "name": "Mock High Acos Campaign 8 (MANUAL)",
+                "campaign_type": "SPONSORED_BRANDS",
+                "targeting_type": "MANUAL",
+                "portfolio_name": "Festive Sale",
+                "daily_budget": 2000.0,
+                "bidding_strategy": "UP_AND_DOWN",
+                "top_pct": 30,
+                "product_pct": 10,
+                "rest_pct": 0,
+                "state": "ENABLED",
+                "delivery_status": "DELIVERING",
+                "profile": "high_acos",
+            },
+            {
+                "name": "Mock Efficient Display Campaign 9 (MANUAL)",
+                "campaign_type": "SPONSORED_DISPLAY",
+                "targeting_type": "MANUAL",
+                "portfolio_name": "New Launches",
+                "daily_budget": 1800.0,
+                "bidding_strategy": "FIXED",
+                "top_pct": 15,
+                "product_pct": 15,
+                "rest_pct": 0,
+                "state": "ENABLED",
+                "delivery_status": "DELIVERING",
+                "profile": "efficient",
+            },
+        ]
+
         campaigns = []
-        profiles = ["winning", "leaking", "bleeding", "efficient", "high_acos", "good", "average", "new", "scheduled", "ended", "good", "average"]
-        for i in range(12):
-            profile = profiles[i % len(profiles)]
-            state = "ENABLED"
-            start_date = today - timedelta(days=random.randint(30, 400))
+        for i, cfg in enumerate(campaign_configs):
+            profile = cfg["profile"]
+            state = cfg["state"]
+            start_date = today - timedelta(days=random.randint(45, 300))
             end_date = None
-            if profile == "new": start_date = today - timedelta(days=3)
-            elif profile == "scheduled": start_date = today + timedelta(days=1)
-            elif profile == "ended":
+            if profile == "ended":
                 start_date = today - timedelta(days=60)
                 end_date = today - timedelta(days=10)
-                state = "PAUSED"
-            elif profile == "paused": state = "PAUSED"
             
-            targeting = "MANUAL" if profile in ("winning", "leaking", "bleeding", "efficient", "high_acos") else ("AUTO" if i % 2 == 0 else "MANUAL")
             c = Campaign(
                 ads_account_id=ads_account_id,
-                name=f"Mock {profile.capitalize()} Campaign {i} ({targeting})",
+                amazon_campaign_id=f"amzn_c_{ads_account_id}_{i}",
                 external_id=f"mock_c_{ads_account_id}_{i}",
+                name=cfg["name"],
+                campaign_type=cfg["campaign_type"],
+                targeting_type=cfg["targeting_type"],
+                portfolio_name=cfg["portfolio_name"],
                 state=state,
-                targeting_type=targeting,
-                bidding_strategy="AUTO_FOR_SALES",
+                delivery_status=cfg["delivery_status"],
+                bidding_strategy=cfg["bidding_strategy"],
+                placement_top_of_search_pct=cfg["top_pct"],
+                placement_product_pages_pct=cfg["product_pct"],
+                placement_rest_of_search_pct=cfg["rest_pct"],
+                placement_top_pct=cfg["top_pct"],
+                placement_product_page_pct=cfg["product_pct"],
+                placement_rest_pct=cfg["rest_pct"],
                 start_date=start_date,
                 end_date=end_date,
-                daily_budget=round(random.uniform(rules["min_budget"] * 2, rules["max_bid"] * 20), 2),
+                daily_budget=cfg["daily_budget"],
+                negative_brands=["UnwantedBrandA", "CompetitorBrandB"],
             )
             self.db.add(c)
             campaigns.append(c)
@@ -178,31 +313,66 @@ class MockAdsProvider(AdsProvider):
             cp = CampaignProduct(campaign_id=c.id, product_id=p.id)
             self.db.add(cp)
             
-            ag = AdGroup(campaign_id=c.id, name="Main Ad Group", default_bid=round(rules["min_bid"] * 5, 2))
+            ag = AdGroup(campaign_id=c.id, name="Main Ad Group", default_bid=15.0)
             self.db.add(ag)
             await self.db.flush()
             
             c_name_lower = c.name.lower()
             if c.targeting_type == "MANUAL":
-                for k in range(random.randint(5, 20)):
+                match_types = ["BROAD", "PHRASE", "EXACT"]
+                for k in range(12):
                     if k == 0 and "bleeding" in c_name_lower:
                         kw_text = f"bleeding target {c.id}"
-                    elif k == 0 and "high_acos" in c_name_lower:
+                    elif k == 0 and ("high_acos" in c_name_lower or "high acos" in c_name_lower):
                         kw_text = f"high acos target {c.id}"
                     elif k == 0 and "efficient" in c_name_lower:
                         kw_text = f"efficient target {c.id}"
                     else:
                         kw_text = f"keyword {k} {c.id}"
-                    kw = Keyword(ad_group_id=ag.id, keyword_text=kw_text, match_type="BROAD", state="ENABLED")
+                    m_type = match_types[k % len(match_types)]
+                    kw = Keyword(
+                        ad_group_id=ag.id,
+                        keyword_text=kw_text,
+                        match_type=m_type,
+                        bid=round(random.uniform(8.0, 35.0), 2),
+                        state="ENABLED"
+                    )
                     self.db.add(kw)
-            else:
-                for k in ["CLOSE_MATCH", "LOOSE_MATCH", "SUBSTITUTES", "COMPLEMENTS"]:
-                    tg = Target(ad_group_id=ag.id, kind="AUTO_GROUP", value=k, state="ENABLED")
+
+                # Product ASIN Targets
+                for _ in range(2):
+                    t_asin = self.generate_asin()
+                    tg = Target(
+                        campaign_id=c.id,
+                        ad_group_id=ag.id,
+                        target_type="PRODUCT",
+                        expression_type="ASIN_SAME_AS",
+                        expression_value=t_asin,
+                        kind="ASIN",
+                        value=t_asin,
+                        bid=round(random.uniform(10.0, 25.0), 2),
+                        state="ENABLED"
+                    )
                     self.db.add(tg)
-                    
-            if random.random() > 0.5:
-                nk = NegativeKeyword(campaign_id=c.id, keyword_text="cheap", match_type="NEGATIVE_EXACT")
-                self.db.add(nk)
+
+                nk1 = NegativeKeyword(campaign_id=c.id, keyword_text="cheap free discount", match_type="NEGATIVE_EXACT")
+                nk2 = NegativeKeyword(campaign_id=c.id, keyword_text="repair manual", match_type="NEGATIVE_PHRASE")
+                self.db.add(nk1)
+                self.db.add(nk2)
+            else:
+                for val, b_val in [("CLOSE_MATCH", 22.0), ("LOOSE_MATCH", 14.0), ("SUBSTITUTES", 18.0), ("COMPLEMENTS", 12.0)]:
+                    tg = Target(
+                        campaign_id=c.id,
+                        ad_group_id=ag.id,
+                        target_type="AUTO_GROUP",
+                        expression_type=val,
+                        expression_value=val,
+                        kind="AUTO_GROUP",
+                        value=val,
+                        bid=b_val,
+                        state="ENABLED"
+                    )
+                    self.db.add(tg)
                 
         await self.db.commit()
         await self.sync_account_data(ads_account_id)
@@ -232,7 +402,8 @@ class MockAdsProvider(AdsProvider):
             if "winning" in c_name_lower: profile = "winning"
             elif "leaking" in c_name_lower: profile = "leaking"
             elif "bleeding" in c_name_lower: profile = "bleeding"
-            elif "high_acos" in c_name_lower: profile = "high_acos"
+            elif "out of budget" in c_name_lower: profile = "out_of_budget"
+            elif "high_acos" in c_name_lower or "high acos" in c_name_lower: profile = "high_acos"
             elif "efficient" in c_name_lower: profile = "efficient"
             elif "new" in c_name_lower: profile = "new"
             
@@ -265,11 +436,26 @@ class MockAdsProvider(AdsProvider):
                     organic_sales = 0.0
                 elif profile == "bleeding":
                     impressions = 150
-                    clicks = 3
-                    spend = round(clicks * rules["min_bid"] * 2.0, 2)
+                    clicks = 4
+                    spend = 20.0 if i < 30 else 5.0
                     orders = 0
                     sales = 0.0
                     organic_sales = 0.0
+                elif profile == "out_of_budget":
+                    if i == 0:
+                        spend = round(c.daily_budget * 0.98, 2)
+                        clicks = 25
+                        impressions = 500
+                        orders = 2
+                        sales = round(orders * p_price, 2)
+                        organic_sales = round(sales * 1.1, 2)
+                    else:
+                        spend = round(random.uniform(20.0, 50.0), 2)
+                        clicks = 6
+                        impressions = 120
+                        orders = 1
+                        sales = round(p_price, 2)
+                        organic_sales = 0.0
                 else:
                     base_imp = random.randint(100, 2000)
                     noise = random.uniform(0.8, 1.2)

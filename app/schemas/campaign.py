@@ -102,22 +102,44 @@ class CampaignCreate(BaseModel):
         return self
 
 class CampaignUpdate(BaseModel):
-    name: str | None = Field(None, min_length=1, max_length=128)
+    name: str | None = None
+    state: Literal["ENABLED", "PAUSED", "ARCHIVED"] | None = None
     daily_budget: float | None = None
+    start_date: date | None = None
     end_date: date | None = None
-    target_acos: float | None = Field(None, gt=0, le=1000)
-    bidding_strategy: BiddingStrategy | None = None
-    placement_top_pct: int | None = Field(None, ge=0, le=900)
-    placement_rest_pct: int | None = Field(None, ge=0, le=900)
-    placement_product_page_pct: int | None = Field(None, ge=0, le=900)
+    target_acos: float | None = None
+    bidding_strategy: str | None = None
+    placement_top_of_search_pct: int | None = None
+    placement_product_pages_pct: int | None = None
+    placement_rest_of_search_pct: int | None = None
+    placement_top_pct: int | None = None
+    placement_rest_pct: int | None = None
+    placement_product_page_pct: int | None = None
+    portfolio_name: str | None = None
+    negative_brands: list[str] | None = None
 
 class StateUpdate(BaseModel):
     state: Literal["ENABLED", "PAUSED", "ARCHIVED"]
 
-class BulkActionRequest(BaseModel):
-    ids: list[int]
-    action: Literal["ENABLE", "PAUSE", "ARCHIVE", "SET_BUDGET", "CHANGE_BUDGET_PCT"]
-    value: float | None = None
+class BulkCampaignActionIn(BaseModel):
+    ads_account_id: int | None = None
+    campaign_ids: list[int] = Field(default=[], alias="ids")
+    action: Literal[
+        "ENABLE", "PAUSE", "ARCHIVE",
+        "BUDGET_SET", "BUDGET_INCREASE_PCT", "BUDGET_DECREASE_PCT",
+        "BUDGET_INCREASE_AMT", "BUDGET_DECREASE_AMT",
+        "SET_BIDDING_STRATEGY", "SET_PLACEMENT_PCT", "SET_PORTFOLIO",
+        "SET_BUDGET", "CHANGE_BUDGET_PCT"
+    ]
+    value: float | str | None = None
+    placement: Literal["TOP_OF_SEARCH", "PRODUCT_PAGES", "REST_OF_SEARCH"] | None = None
+    min_budget_floor: float | None = None
+    max_budget_cap: float | None = None
+
+    class Config:
+        populate_by_name = True
+
+BulkActionRequest = BulkCampaignActionIn
 
 class CampaignResponse(BaseModel):
     id: int
@@ -209,6 +231,73 @@ class ForecastRequest(BaseModel):
     default_bid: float | None = None
     targeting_type: Literal["AUTO", "MANUAL"] | None = None
     target_count: int | None = None
+    placement_top_of_search_pct: int | None = 0
+    placement_product_pages_pct: int | None = 0
+    placement_rest_of_search_pct: int | None = 0
+    bidding_strategy: str | None = "DOWN_ONLY"
+
+
+class PlacementsUpdate(BaseModel):
+    top_of_search_pct: Optional[int] = None
+    product_pages_pct: Optional[int] = None
+    rest_of_search_pct: Optional[int] = None
+    top_pct: Optional[int] = None
+    product_page_pct: Optional[int] = None
+    rest_pct: Optional[int] = None
+
+
+class TargetPatch(BaseModel):
+    bid: Optional[float] = None
+    state: Optional[Literal["ENABLED", "PAUSED", "ARCHIVED"]] = None
+
+
+class SearchTermHarvestIn(BaseModel):
+    search_term: str
+    match_type: Literal["EXACT", "PHRASE", "BROAD"] = "EXACT"
+    bid: float
+    ad_group_id: Optional[int] = None
+
+
+class SearchTermNegateIn(BaseModel):
+    search_term: str
+    match_type: Literal["NEGATIVE_EXACT", "NEGATIVE_PHRASE"] = "NEGATIVE_EXACT"
+    level: Literal["CAMPAIGN", "AD_GROUP"] = "CAMPAIGN"
+    ad_group_id: Optional[int] = None
+
+
+class NegativeIn(BaseModel):
+    keyword_text: Optional[str] = None
+    match_type: Optional[Literal["NEGATIVE_EXACT", "NEGATIVE_PHRASE", "NEGATIVE_BRAND", "NEGATIVE_ASIN"]] = "NEGATIVE_EXACT"
+    level: Optional[Literal["CAMPAIGN", "AD_GROUP"]] = "CAMPAIGN"
+    ad_group_id: Optional[int] = None
+    brand: Optional[str] = None
+
+
+class CampaignWizardIn(BaseModel):
+    ads_account_id: int
+    draft_id: Optional[int] = None
+    name: str = Field(min_length=1, max_length=128)
+    campaign_type: Literal["SPONSORED_PRODUCTS", "SPONSORED_BRANDS", "SPONSORED_DISPLAY"] = "SPONSORED_PRODUCTS"
+    targeting_type: Literal["AUTO", "MANUAL"]
+    state: Literal["ENABLED", "PAUSED"] = "ENABLED"
+    start_date: date
+    end_date: Optional[date] = None
+    daily_budget: float
+    target_acos: Optional[float] = None
+    bidding_strategy: str = "DOWN_ONLY"
+    placement_top_of_search_pct: int = 0
+    placement_product_pages_pct: int = 0
+    placement_rest_of_search_pct: int = 0
+    placement_top_pct: int = 0
+    placement_rest_pct: int = 0
+    placement_product_page_pct: int = 0
+    portfolio_name: Optional[str] = None
+    site: Optional[str] = "IN"
+    product_ids: list[int] = Field(default_factory=list)
+    ad_groups: list[AdGroupIn] = Field(default_factory=list)
+    negative_keywords: list[NegativeKeywordIn] = Field(default_factory=list)
+    negative_asins: list[str] = Field(default_factory=list)
+    negative_brands: list[str] = Field(default_factory=list)
 
 
 class ProductLookupRequest(BaseModel):
