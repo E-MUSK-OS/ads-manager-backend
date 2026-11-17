@@ -15,7 +15,7 @@ from app.recommendations.registry import (
     LIMITS,
 )
 from app.core.exceptions import ServiceValidationError
-from app.core.marketplace_rules import marketplace_or_us
+from app.core.marketplace_rules import marketplace_or_in
 from app.models.campaign import Campaign
 from app.models.ads_account import AdsAccount
 from app.models.recommendation_rule import RecommendationRule
@@ -109,7 +109,7 @@ async def validate_rule_in(
     rule_id: Optional[int] = None,
 ) -> None:
     errors: list[dict[str, str]] = []
-    marketplace_rules = marketplace_or_us(account.marketplace)
+    marketplace_rules = marketplace_or_in(account.marketplace)
 
     # 1. metric/op/date_filter known
     if rule.date_filter not in DATE_FILTERS:

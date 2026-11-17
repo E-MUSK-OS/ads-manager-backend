@@ -1,5 +1,6 @@
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
+from pydantic import BaseModel, Field
 from app.database import get_db
 from app.dependencies import get_current_user
 from app.models.user import User
@@ -7,8 +8,18 @@ from app.providers.llm.claude_provider import ClaudeProvider
 
 router = APIRouter(prefix="/ai", tags=["ai"])
 
+class ChatRequest(BaseModel):
+    message: str = Field(..., min_length=1, max_length=2000)
+
 @router.post("/chat")
-async def chat(message: str, db: AsyncSession = Depends(get_db), current_user: User = Depends(get_current_user)):
+async def chat(
+    payload: ChatRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    message = payload.message.strip()
+    if not message:
+        raise HTTPException(status_code=422, detail="Message cannot be empty")
     from sqlalchemy import select
     from app.models.ads_account import AdsAccount
     from app.models.campaign import Campaign
@@ -18,7 +29,7 @@ async def chat(message: str, db: AsyncSession = Depends(get_db), current_user: U
     acc_res = await db.execute(select(AdsAccount).where(AdsAccount.user_id == current_user.id))
     accounts = acc_res.scalars().all()
     
-    context = "User has no connected Amazon Ads accounts."
+    context = "User has no connected Amazon India (Amazon.in) advertising accounts."
     if accounts:
         account = accounts[0]
         # Fetch campaigns
@@ -32,7 +43,11 @@ async def chat(message: str, db: AsyncSession = Depends(get_db), current_user: U
         total_sales = totals.get("sales") or 0.0
         acos = totals.get("acos") or 0.0
         
-        context = f"User has connected account ID {account.id}. They have {len(campaigns)} campaigns. Total spend: ₹{total_spend:.2f}, Total sales: ₹{total_sales:.2f}, ACOS: {acos:.1f}%."
+        context = (
+            f"User has connected account ID {account.id} on Amazon India (Amazon.in, marketplace IN). "
+            f"They have {len(campaigns)} campaigns. 30-day aggregate performance: "
+            f"Total spend: ₹{total_spend:.2f}, Total sales: ₹{total_sales:.2f}, ACOS: {acos:.1f}%."
+        )
     provider = ClaudeProvider()
     response = await provider.chat([{"role": "user", "content": message}], context)
     return {"response": response}

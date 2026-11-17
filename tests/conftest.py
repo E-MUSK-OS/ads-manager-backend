@@ -11,6 +11,7 @@ from app.dependencies import get_current_user
 from app.models.user import User
 from app.models.ads_account import AdsAccount
 from app.models.product import Product
+from app.models.contact_message import ContactMessage
 
 from sqlalchemy import event
 
@@ -79,11 +80,19 @@ async def account_b(db_session: AsyncSession, user_b: User):
 
 @pytest_asyncio.fixture(autouse=True)
 def setup_auth_override():
-    from fastapi import Header
+    from fastapi import Header, HTTPException
     # Make get_current_user read from header
     async def override_get_current_user(x_test_user: str = Header("1")):
+        if not x_test_user or x_test_user in ("0", "anonymous", "none"):
+            raise HTTPException(status_code=401, detail="Could not validate credentials")
         async with TestingSessionLocal() as session:
-            user = await session.get(User, int(x_test_user))
+            try:
+                uid = int(x_test_user)
+            except ValueError:
+                raise HTTPException(status_code=401, detail="Could not validate credentials")
+            user = await session.get(User, uid)
+            if not user:
+                raise HTTPException(status_code=401, detail="Could not validate credentials")
             return user
             
     app.dependency_overrides[get_current_user] = override_get_current_user

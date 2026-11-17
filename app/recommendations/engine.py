@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.config import settings
-from app.core.marketplace_rules import marketplace_or_us, today_for
+from app.core.marketplace_rules import marketplace_or_in, today_for
 from app.models.ads_account import AdsAccount
 from app.models.campaign import Campaign
 from app.models.ad_group import AdGroup
@@ -88,7 +88,7 @@ class RuleBasedEngine:
     ) -> list[Candidate]:
         all_candidates: list[Candidate] = []
         total_evaluated_count = 0
-        m_rules = marketplace_or_us(account.marketplace)
+        m_rules = marketplace_or_in(account.marketplace)
 
         # Pre-fetch all enabled campaigns for this account
         camp_res = await db.execute(

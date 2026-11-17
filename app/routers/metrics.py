@@ -13,9 +13,10 @@ router = APIRouter(prefix="/metrics", tags=["metrics"])
 async def get_metrics(db: AsyncSession = Depends(get_db), current_user: User = Depends(get_current_user)):
     from app.models.campaign import Campaign
     from app.models.ads_account import AdsAccount
-    from datetime import date, timedelta
+    from app.core.marketplace_rules import today_for
+    from datetime import timedelta
     
-    thirty_days_ago = date.today() - timedelta(days=30)
+    thirty_days_ago = today_for("IN") - timedelta(days=30)
     
     query = (
         select(MetricDaily)

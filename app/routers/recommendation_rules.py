@@ -34,7 +34,7 @@ from app.recommendations.schemas import (
     PreviewRequest,
     validate_rule_in,
 )
-from app.core.marketplace_rules import marketplace_or_us, today_for
+from app.core.marketplace_rules import marketplace_or_in, today_for
 from app.core.exceptions import ServiceValidationError
 
 router = APIRouter(prefix="/recommendations", tags=["recommendations"])
@@ -96,7 +96,7 @@ async def get_meta(
     current_user: User = Depends(get_current_user),
 ):
     account = await assert_owned_account(db, ads_account_id, current_user)
-    m_rules = marketplace_or_us(account.marketplace)
+    m_rules = marketplace_or_in(account.marketplace)
 
     return {
         "date_filters": DATE_FILTERS,

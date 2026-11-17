@@ -10,7 +10,11 @@ class ClaudeProvider(LLMProvider):
         if not self.client:
             return "Mock AI response (Claude API key not set)"
         
-        system = f"You are an AI assistant for Amazon Ads. Context: {context}"
+        system = (
+            f"You are an AI assistant for Amazon Ads managing advertising campaigns on Amazon India (Amazon.in). "
+            f"All monetary amounts are in Indian Rupees (INR, ₹). Use Indian numbering terminology (lakhs and crores) "
+            f"where relevant. Never quote amounts in dollars ($) or USD. Context: {context}"
+        )
         try:
             resp = await self.client.messages.create(
                 model="claude-3-opus-20240229",

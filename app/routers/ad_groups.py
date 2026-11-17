@@ -8,7 +8,7 @@ from app.models.ad_group import AdGroup
 from app.models.campaign import Campaign
 from app.models.ads_account import AdsAccount
 from app.schemas.ad_group import AdGroupResponse, AdGroupPatch
-from app.core.marketplace_rules import marketplace_or_us
+from app.core.marketplace_rules import marketplace_or_in
 
 router = APIRouter(prefix="/ad-groups", tags=["ad-groups"])
 
@@ -28,7 +28,7 @@ async def patch_ad_group(
     ag = await load_owned_ad_group(db, id, current_user)
     campaign = (await db.execute(select(Campaign).where(Campaign.id == ag.campaign_id))).scalars().first()
     account = (await db.execute(select(AdsAccount).where(AdsAccount.id == campaign.ads_account_id))).scalars().first()
-    rules = marketplace_or_us(account.marketplace)
+    rules = marketplace_or_in(account.marketplace)
 
     if payload.name is not None:
         name_clean = payload.name.strip()

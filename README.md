@@ -10,14 +10,32 @@ This is the FastAPI backend for the AI-Powered Amazon Ads Management Platform.
 ## Environment Variables
 Copy `.env.example` to `.env` and fill in the necessary values:
 ```bash
+ENVIRONMENT=development                                  # Set ENVIRONMENT=production on any public deployment.
 DATABASE_URL=postgresql+asyncpg://<user>:<password>@<host>/<dbname>?sslmode=require
-JWT_SECRET=your_secret_key
-ACCESS_TOKEN_EXPIRE_MINUTES=1440
-ALLOWED_ORIGINS=http://localhost:3000,http://127.0.0.1:3000
+JWT_SECRET_KEY=your_very_long_random_secret_key_here   # min 32 chars; "changeme" rejected at startup
+JWT_ACCESS_TOKEN_EXPIRE_MINUTES=30
+JWT_REFRESH_TOKEN_EXPIRE_DAYS=30
+FRONTEND_URL=http://localhost:3000                      # used for CORS; comma-separate multiple origins (must use https in production)
+SUPPORTED_MARKETPLACES=IN                               # Comma-separated allowed marketplaces (default IN)
+CONTACT_RETENTION_DAYS=365                              # Retention window for contact form inquiries
+
+
+# Amazon LWA (only required when ADS_PROVIDER=amazon)
+ADS_PROVIDER=mock                                       # mock | amazon
+AMAZON_LWA_CLIENT_ID=<your-lwa-client-id>
+AMAZON_LWA_CLIENT_SECRET=<your-lwa-client-secret>
+AMAZON_LWA_REDIRECT_URI=http://localhost:3000/connect-amazon/callback
+TOKEN_ENCRYPTION_KEY=<fernet-key-generate-with-python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())">
+AMAZON_ADS_REGION=eu                                    # na | eu | fe — TODO(verify correct region)
 ```
 - `DATABASE_URL`: Asynchronous PostgreSQL connection string using `postgresql+asyncpg://`.
-- `JWT_SECRET`: Secret key for signing access tokens.
-- `ALLOWED_ORIGINS`: Comma-separated list of allowed frontend origins for CORS.
+- `JWT_SECRET_KEY`: Secret key for signing JWTs. Must be set and cannot be `"changeme"` (app refuses to start).
+- `JWT_ACCESS_TOKEN_EXPIRE_MINUTES`: Access token TTL in minutes (default 30).
+- `JWT_REFRESH_TOKEN_EXPIRE_DAYS`: Refresh token TTL in days (default 30).
+- `FRONTEND_URL`: Frontend origin(s) used for CORS — replaces the old `ALLOWED_ORIGINS` name.
+- `ADS_PROVIDER`: `mock` (default, no Amazon credentials needed) or `amazon` (requires LWA creds below).
+- `AMAZON_LWA_CLIENT_ID` / `AMAZON_LWA_CLIENT_SECRET`: From your Login with Amazon Security Profile.
+- `TOKEN_ENCRYPTION_KEY`: Fernet key used to encrypt stored refresh tokens at rest.
 
 ## Running Locally
 

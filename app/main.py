@@ -13,9 +13,9 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Amazon Ads Management Platform API", lifespan=lifespan)
 
-import os
+from app.config import settings
 
-origins = [o.strip() for o in os.getenv("FRONTEND_URL", "http://localhost:3000").split(",") if o.strip()]
+origins = [o.strip() for o in settings.FRONTEND_URL.split(",") if o.strip()]
 
 app.add_middleware(
     CORSMiddleware,
@@ -74,7 +74,7 @@ async def unhandled_exception_handler(request: Request, exc: Exception):
         headers=headers
     )
 
-from app.routers import auth, ads_accounts, campaigns, metrics, ai, billing, ad_groups, keywords, search_terms, automation_rules, products, campaign_drafts, recommendation_rules, recommendations
+from app.routers import auth, ads_accounts, campaigns, metrics, ai, billing, ad_groups, keywords, search_terms, automation_rules, products, campaign_drafts, recommendation_rules, recommendations, contact
 
 app.include_router(auth.router)
 app.include_router(ads_accounts.router)
@@ -90,6 +90,7 @@ app.include_router(products.router)
 app.include_router(campaign_drafts.router)
 app.include_router(recommendation_rules.router)
 app.include_router(recommendations.router)
+app.include_router(contact.router)
 # Startup event removed
 
 @app.get("/health")

@@ -13,7 +13,7 @@ from app.models.negative_keyword import NegativeKeyword
 from app.models.product import Product
 from app.schemas.campaign import CampaignCreate
 from app.core.exceptions import ServiceValidationError
-from app.core.marketplace_rules import today_for, MARKETPLACE_RULES, marketplace_or_us
+from app.core.marketplace_rules import today_for, MARKETPLACE_RULES, marketplace_or_in
 
 async def validate_create(db: AsyncSession, account: AdsAccount, rules: dict, payload: CampaignCreate):
     errors = []
@@ -133,7 +133,7 @@ async def validate_create(db: AsyncSession, account: AdsAccount, rules: dict, pa
     return errors, warnings
 
 async def create_campaign(db: AsyncSession, account: AdsAccount, payload: CampaignCreate):
-    rules = marketplace_or_us(account.marketplace)
+    rules = marketplace_or_in(account.marketplace)
     errors, warnings = await validate_create(db, account, rules, payload)
     if errors:
         raise ServiceValidationError(errors)

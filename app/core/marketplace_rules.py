@@ -1,4 +1,4 @@
-from datetime import datetime, date
+from datetime import datetime, date, timezone, timedelta
 from typing import Any
 try:
     from zoneinfo import ZoneInfo
@@ -76,12 +76,9 @@ MARKETPLACE_RULES: dict[str, dict[str, Any]] = {
     },
 }
 
-def marketplace_or_in(marketplace: str | None) -> dict[str, Any]:
-    if marketplace and marketplace in MARKETPLACE_RULES:
-        return MARKETPLACE_RULES[marketplace]
-    return MARKETPLACE_RULES["IN"]
+_FIXED_OFFSETS = {"Asia/Kolkata": timedelta(hours=5, minutes=30)}
 
-def marketplace_or_us(marketplace: str | None) -> dict[str, Any]:
+def marketplace_or_in(marketplace: str | None) -> dict[str, Any]:
     if marketplace and marketplace in MARKETPLACE_RULES:
         return MARKETPLACE_RULES[marketplace]
     return MARKETPLACE_RULES["IN"]
@@ -91,8 +88,10 @@ def today_for(marketplace: str | None) -> date:
     try:
         return datetime.now(ZoneInfo(rules["tz"])).date()
     except Exception:
-        # Windows without tzdata fallback
-        return datetime.now().date()
+        offset = _FIXED_OFFSETS.get(rules["tz"])
+        if offset is not None:
+            return datetime.now(timezone(offset)).date()
+        return datetime.now(timezone.utc).date()
 
 def compute_max_effective_bid(
     base_bid: float,

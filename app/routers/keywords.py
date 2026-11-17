@@ -11,7 +11,7 @@ from app.models.campaign import Campaign
 from app.models.ads_account import AdsAccount
 from app.schemas.keyword import KeywordResponse, KeywordCreate, KeywordPatch
 from app.schemas.campaign import clean_keyword_text
-from app.core.marketplace_rules import marketplace_or_us
+from app.core.marketplace_rules import marketplace_or_in
 
 router = APIRouter(prefix="/keywords", tags=["keywords"])
 
@@ -35,7 +35,7 @@ async def create_keyword(
     ag = await load_owned_ad_group(db, payload.ad_group_id, current_user)
     campaign = (await db.execute(select(Campaign).where(Campaign.id == ag.campaign_id))).scalars().first()
     account = (await db.execute(select(AdsAccount).where(AdsAccount.id == campaign.ads_account_id))).scalars().first()
-    rules = marketplace_or_us(account.marketplace)
+    rules = marketplace_or_in(account.marketplace)
 
     if payload.bid is not None:
         if payload.bid < rules["min_bid"] or payload.bid > rules["max_bid"]:
@@ -86,7 +86,7 @@ async def patch_keyword(
     ag = (await db.execute(select(AdGroup).where(AdGroup.id == kw.ad_group_id))).scalars().first()
     campaign = (await db.execute(select(Campaign).where(Campaign.id == ag.campaign_id))).scalars().first()
     account = (await db.execute(select(AdsAccount).where(AdsAccount.id == campaign.ads_account_id))).scalars().first()
-    rules = marketplace_or_us(account.marketplace)
+    rules = marketplace_or_in(account.marketplace)
 
     if payload.bid is not None:
         if payload.bid < rules["min_bid"] or payload.bid > rules["max_bid"]:

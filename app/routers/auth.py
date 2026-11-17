@@ -96,3 +96,36 @@ async def google_auth(data: GoogleAuth, db: AsyncSession = Depends(get_db)):
 @router.get("/me", response_model=UserResponse)
 async def read_users_me(current_user: User = Depends(get_current_user)):
     return current_user
+
+class DeleteAccountRequest(BaseModel):
+    confirm: str
+
+@router.delete("/me")
+async def delete_account_me(
+    payload: DeleteAccountRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    if payload.confirm != "DELETE":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Confirmation required: 'confirm' must equal 'DELETE'",
+        )
+
+    from sqlalchemy import delete, func
+    from app.models.contact_message import ContactMessage
+
+    # 1. Delete user's contact messages (case-insensitive email match)
+    if current_user.email:
+        await db.execute(
+            delete(ContactMessage).where(
+                func.lower(ContactMessage.email) == func.lower(current_user.email)
+            )
+        )
+
+    # 2. Delete user row (cascades remove ads accounts, campaigns, tokens, etc.)
+    await db.execute(delete(User).where(User.id == current_user.id))
+    await db.commit()
+
+    return {"status": "ok"}
+

@@ -8,7 +8,7 @@ from fastapi import HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.marketplace_rules import marketplace_or_us
+from app.core.marketplace_rules import marketplace_or_in
 from app.models.ads_account import AdsAccount
 from app.models.campaign import Campaign
 from app.models.ad_group import AdGroup
@@ -36,7 +36,7 @@ async def apply_action(
     if not account:
         raise HTTPException(404, detail="Ads account not found")
 
-    m_rules = marketplace_or_us(account.marketplace)
+    m_rules = marketplace_or_in(account.marketplace)
     act_type = action.get("type")
     params = dict(action.get("params") or {})
 

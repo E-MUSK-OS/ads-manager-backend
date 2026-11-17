@@ -37,9 +37,10 @@ from app.services.metrics_service import (
     get_report, get_summary, determine_health, derive, get_default_health_rules,
     get_or_create_user_campaign_settings, compute_period_deltas
 )
-from app.core.marketplace_rules import MARKETPLACE_RULES, today_for, marketplace_or_us, marketplace_or_in, compute_max_effective_bid
+from app.core.marketplace_rules import MARKETPLACE_RULES, today_for, marketplace_or_in, compute_max_effective_bid
 from app.core.exceptions import ServiceValidationError
 from app.providers.ads.mock_provider import MockAdsProvider
+from app.providers.ads.factory import get_ads_provider
 
 router = APIRouter(prefix="/campaigns", tags=["campaigns"])
 
@@ -586,7 +587,7 @@ async def suggestions(
     current_user: User = Depends(get_current_user)
 ):
     account = await assert_owned_account(db, ads_account_id, current_user)
-    rules = marketplace_or_us(account.marketplace)
+    rules = marketplace_or_in(account.marketplace)
     
     pids = []
     if product_ids:
@@ -637,7 +638,7 @@ async def bid_suggestions(
     current_user: User = Depends(get_current_user)
 ):
     account = await assert_owned_account(db, payload.ads_account_id, current_user)
-    rules = marketplace_or_us(account.marketplace)
+    rules = marketplace_or_in(account.marketplace)
     default_bid = rules["recommended_budget"] * 0.05
 
     items = []
@@ -994,8 +995,14 @@ async def get_brands(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    provider = MockAdsProvider(db)
-    return provider.search_brands(q)
+    provider = get_ads_provider(db)
+    try:
+        return provider.search_brands(q)
+    except NotImplementedError:
+        raise HTTPException(
+            status_code=501,
+            detail="Live Amazon brand search is not implemented yet.",
+        )
 
 @router.get("/name-check")
 async def check_name(
@@ -1068,7 +1075,7 @@ async def validate(
     current_user: User = Depends(get_current_user)
 ):
     account = await assert_owned_account(db, payload.ads_account_id, current_user)
-    rules = marketplace_or_us(account.marketplace)
+    rules = marketplace_or_in(account.marketplace)
     errors, warnings = await validate_create(db, account, rules, payload)
     return {"errors": errors, "warnings": warnings}
 
@@ -1108,7 +1115,7 @@ async def bulk_action(
                     continue
 
                 account = (await db.execute(select(AdsAccount).where(AdsAccount.id == c.ads_account_id))).scalars().first()
-                today = today_for(account.marketplace) if account else date.today()
+                today = today_for(account.marketplace) if account else today_for("IN")
 
                 if payload.action == "ENABLE":
                     c.state = "ENABLED"
@@ -1257,7 +1264,7 @@ async def update_campaign(
     c = await load_owned_campaign(db, campaign_id, current_user)
     account = (await db.execute(select(AdsAccount).where(AdsAccount.id == c.ads_account_id))).scalars().first()
     rules = marketplace_or_in(account.marketplace) if account else MARKETPLACE_RULES["IN"]
-    today = today_for(account.marketplace) if account else date.today()
+    today = today_for(account.marketplace) if account else today_for("IN")
 
     if c.state == "ARCHIVED":
         raise HTTPException(
@@ -1396,7 +1403,7 @@ async def duplicate_campaign(
 ):
     c = await load_owned_campaign(db, campaign_id, current_user)
     account = (await db.execute(select(AdsAccount).where(AdsAccount.id == c.ads_account_id))).scalars().first()
-    today = today_for(account.marketplace) if account else date.today()
+    today = today_for(account.marketplace) if account else today_for("IN")
 
     new_c = Campaign(
         ads_account_id=c.ads_account_id,
@@ -1615,7 +1622,7 @@ async def get_campaign_placements(
 ):
     c = await load_owned_campaign(db, campaign_id, current_user)
     account = (await db.execute(select(AdsAccount).where(AdsAccount.id == c.ads_account_id))).scalars().first()
-    today = today_for(account.marketplace) if account else date.today()
+    today = today_for(account.marketplace) if account else today_for("IN")
     end = end_date or today
     start = start_date or (end - timedelta(days=6))
 
@@ -1724,7 +1731,7 @@ async def get_campaign_targets(
     c = await load_owned_campaign(db, campaign_id, current_user)
     account = (await db.execute(select(AdsAccount).where(AdsAccount.id == c.ads_account_id))).scalars().first()
     rules = marketplace_or_in(account.marketplace) if account else MARKETPLACE_RULES["IN"]
-    today = today_for(account.marketplace) if account else date.today()
+    today = today_for(account.marketplace) if account else today_for("IN")
     end = end_date or today
     start = start_date or (end - timedelta(days=6))
 
