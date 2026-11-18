@@ -181,8 +181,15 @@ async def get_campaigns_timeseries(
     start = start_date or (end - timedelta(days=6))
 
     camp_q = select(Campaign.id).where(Campaign.ads_account_id == ads_account_id)
-    if state: camp_q = camp_q.where(Campaign.state == state.upper())
-    if delivery_status: camp_q = camp_q.where(Campaign.delivery_status == delivery_status.upper())
+    if state and state.upper() != "ALL":
+        camp_q = camp_q.where(Campaign.state == state.upper())
+    if delivery_status and delivery_status.upper() != "ALL":
+        if delivery_status.upper() == "DELIVERING":
+            camp_q = camp_q.where(Campaign.delivery_status == "DELIVERING", Campaign.state == "ENABLED")
+        elif delivery_status.upper() == "OUT_OF_BUDGET":
+            camp_q = camp_q.where(Campaign.delivery_status == "OUT_OF_BUDGET", Campaign.state == "ENABLED")
+        else:
+            camp_q = camp_q.where(Campaign.delivery_status == delivery_status.upper())
     if campaign_type: camp_q = camp_q.where(Campaign.campaign_type == campaign_type.upper())
     if targeting_type: camp_q = camp_q.where(Campaign.targeting_type == targeting_type.upper())
     if bidding_strategy: camp_q = camp_q.where(Campaign.bidding_strategy == bidding_strategy.upper())
@@ -299,8 +306,15 @@ async def get_campaigns(
     start = start_date or (end - timedelta(days=6))
 
     camp_q = select(Campaign).where(Campaign.ads_account_id == ads_account_id)
-    if state: camp_q = camp_q.where(Campaign.state == state.upper())
-    if delivery_status: camp_q = camp_q.where(Campaign.delivery_status == delivery_status.upper())
+    if state and state.upper() != "ALL":
+        camp_q = camp_q.where(Campaign.state == state.upper())
+    if delivery_status and delivery_status.upper() != "ALL":
+        if delivery_status.upper() == "DELIVERING":
+            camp_q = camp_q.where(Campaign.delivery_status == "DELIVERING", Campaign.state == "ENABLED")
+        elif delivery_status.upper() == "OUT_OF_BUDGET":
+            camp_q = camp_q.where(Campaign.delivery_status == "OUT_OF_BUDGET", Campaign.state == "ENABLED")
+        else:
+            camp_q = camp_q.where(Campaign.delivery_status == delivery_status.upper())
     if campaign_type: camp_q = camp_q.where(Campaign.campaign_type == campaign_type.upper())
     if targeting_type: camp_q = camp_q.where(Campaign.targeting_type == targeting_type.upper())
     if bidding_strategy: camp_q = camp_q.where(Campaign.bidding_strategy == bidding_strategy.upper())

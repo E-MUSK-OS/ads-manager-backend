@@ -300,9 +300,22 @@ async def get_report(
     if q and q.strip():
         query = query.where(func.lower(Campaign.name).like(f"%{q.strip().lower()}%"))
     if state:
-        query = query.where(Campaign.state.in_([s.upper() for s in state]))
-    if delivery_status:
-        query = query.where(func.upper(Campaign.delivery_status) == delivery_status.upper())
+        valid_states = [s.upper() for s in state if s.upper() != "ALL"]
+        if valid_states:
+            query = query.where(Campaign.state.in_(valid_states))
+    if delivery_status and delivery_status.upper() != "ALL":
+        if delivery_status.upper() == "DELIVERING":
+            query = query.where(
+                func.upper(Campaign.delivery_status) == "DELIVERING",
+                Campaign.state == "ENABLED"
+            )
+        elif delivery_status.upper() == "OUT_OF_BUDGET":
+            query = query.where(
+                func.upper(Campaign.delivery_status) == "OUT_OF_BUDGET",
+                Campaign.state == "ENABLED"
+            )
+        else:
+            query = query.where(func.upper(Campaign.delivery_status) == delivery_status.upper())
     if targeting_type:
         query = query.where(Campaign.targeting_type == targeting_type)
     if min_budget is not None:
