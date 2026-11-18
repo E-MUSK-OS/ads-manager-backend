@@ -15,6 +15,7 @@ from app.database import get_db
 from app.dependencies import get_current_user, assert_owned_account
 from app.models.user import User
 from app.models.ads_account import AdsAccount
+from app.models.sync_run import SyncRun
 from app.schemas.ads_account import (
     AdsAccountResponse,
     LWAAuthorizeUrlResponse,
@@ -62,17 +63,26 @@ async def get_account_rules(
 @router.post("/{account_id}/sync")
 async def sync_account(
     account_id: int,
+    force: bool = False,
+    days_back: int = 30,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
     account = await assert_owned_account(db, account_id, current_user)
     provider = get_ads_provider(db, account)
     try:
-        await provider.sync_account_data(account.id)
+        res = await provider.sync_account_data(account.id, days_back=days_back, force=force)
     except NotImplementedError:
         raise HTTPException(
             status_code=501,
             detail="Live Amazon sync is not implemented yet.",
+        )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Sync error: {str(exc)}"
         )
 
     try:
@@ -80,7 +90,42 @@ async def sync_account(
         await run_engine(db, account, trigger="sync")
     except Exception as e:
         logger.warning("Failed to run recommendations on sync: %s", e)
-    return {"status": "ok"}
+
+    return res
+
+
+@router.get("/{account_id}/sync-status")
+async def get_sync_status(
+    account_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    account = await assert_owned_account(db, account_id, current_user)
+    
+    recent_run_res = await db.execute(
+        select(SyncRun)
+        .where(SyncRun.ads_account_id == account_id)
+        .order_by(SyncRun.started_at.desc())
+        .limit(1)
+    )
+    last_run = recent_run_res.scalars().first()
+
+    return {
+        "account_id": account.id,
+        "sync_status": account.sync_status,
+        "connection_status": account.connection_status,
+        "last_synced_at": account.last_synced_at,
+        "last_run": {
+            "id": last_run.id,
+            "status": last_run.status,
+            "sync_type": last_run.sync_type,
+            "started_at": last_run.started_at,
+            "completed_at": last_run.completed_at,
+            "campaigns_count": last_run.campaigns_count,
+            "metrics_rows_count": last_run.metrics_rows_count,
+            "error_message": last_run.error_message,
+        } if last_run else None
+    }
 
 
 @router.delete("/{account_id}")

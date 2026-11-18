@@ -21,5 +21,6 @@ class AdsAccount(Base):
     amazon_account_name = Column(String, nullable=True)
     last_synced_at = Column(DateTime(timezone=True), nullable=True)
     connection_status = Column(String, default="connected", server_default="connected", nullable=False)
+    sync_status = Column(String, default="idle", server_default="idle", nullable=False)
 
     user = relationship("User", backref="ads_accounts")

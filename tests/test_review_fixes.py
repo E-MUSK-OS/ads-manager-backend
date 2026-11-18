@@ -8,6 +8,7 @@ from app.config import settings
 from app.core import crypto
 from app.models.ads_account import AdsAccount
 from app.models.contact_message import ContactMessage
+from app.providers.ads.amazon_provider import AmazonAdsProvider
 from app.routers.contact import _RATE_LIMIT_BUCKET
 
 
@@ -190,6 +191,11 @@ async def test_live_mode_connect_returns_400_and_creates_no_row(client_a, db_ses
 @pytest.mark.asyncio
 async def test_live_mode_sync_returns_501(client_a, user_a, db_session, monkeypatch):
     monkeypatch.setattr(settings, "ADS_PROVIDER", "amazon")
+
+    async def mock_sync(self, account_id, *args, **kwargs):
+        raise NotImplementedError("Live Amazon sync is not implemented yet.")
+
+    monkeypatch.setattr(AmazonAdsProvider, "sync_account_data", mock_sync)
 
     real_acc = AdsAccount(
         user_id=user_a.id,

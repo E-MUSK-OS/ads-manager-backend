@@ -315,6 +315,7 @@ class TestAdsDataSeeder:
                 start_date=start_date,
                 end_date=end_date,
                 daily_budget=cfg["daily_budget"],
+                site="AMAZON_AND_BEYOND",
                 negative_brands=["UnwantedBrandA", "CompetitorBrandB"],
             )
             self.db.add(c)

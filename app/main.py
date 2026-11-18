@@ -74,10 +74,11 @@ async def unhandled_exception_handler(request: Request, exc: Exception):
         headers=headers
     )
 
-from app.routers import auth, ads_accounts, campaigns, ad_groups, keywords, search_terms, products, recommendation_rules, recommendations, contact
+from app.routers import auth, ads_accounts, hourly, campaigns, ad_groups, keywords, search_terms, products, recommendation_rules, recommendations, contact
 
 app.include_router(auth.router)
 app.include_router(ads_accounts.router)
+app.include_router(hourly.router)
 app.include_router(campaigns.router)
 app.include_router(ad_groups.router)
 app.include_router(keywords.router)

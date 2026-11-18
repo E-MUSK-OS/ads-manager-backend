@@ -40,6 +40,11 @@ from app.models.recommendation_run import RecommendationRun
 from app.models.placement_metric_daily import PlacementMetricDaily
 from app.models.campaign_history import CampaignHistory
 from app.models.contact_message import ContactMessage
+from app.models.sync_run import SyncRun
+from app.models.saved_filter import SavedFilter
+from app.models.campaign_bid_threshold import CampaignBidThreshold
+from app.models.campaign_hourly_metric import CampaignHourlyMetric
+from app.models.hourly_stream_status import HourlyStreamStatus
 from app.config import settings
 
 target_metadata = Base.metadata

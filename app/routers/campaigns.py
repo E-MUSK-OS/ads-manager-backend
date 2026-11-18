@@ -24,15 +24,21 @@ from app.models.campaign_draft import CampaignDraft
 from app.models.placement_metric_daily import PlacementMetricDaily
 from app.models.campaign_history import CampaignHistory
 from app.models.recommendation import Recommendation
+from app.models.saved_filter import SavedFilter
+from app.models.campaign_bid_threshold import CampaignBidThreshold
+from app.schemas.saved_filter import SavedFilterCreate, SavedFilterResponse
 from app.schemas.campaign import (
     CampaignResponse, CampaignCreate, CampaignUpdate, StateUpdate, BulkActionRequest,
     BidSuggestionsRequest, ForecastRequest, NegativeKeywordIn,
     UserCampaignSettingsResponse, UserCampaignSettingsUpdate, clean_keyword_text,
     BulkCampaignActionIn, PlacementsUpdate, TargetPatch, SearchTermHarvestIn,
-    SearchTermNegateIn, NegativeIn, CampaignWizardIn
+    SearchTermNegateIn, NegativeIn, CampaignWizardIn,
+    BidThresholdIn, BidThresholdOut
 )
 import uuid
+import json
 from app.services.campaign_service import create_campaign, validate_create, load_detail
+from app.providers.ads.amazon_provider import AmazonAdsProvider
 from app.services.metrics_service import (
     get_report, get_summary, determine_health, derive, get_default_health_rules,
     get_or_create_user_campaign_settings, compute_period_deltas
@@ -42,6 +48,54 @@ from app.core.exceptions import ServiceValidationError
 from app.providers.ads.factory import get_ads_provider
 
 router = APIRouter(prefix="/campaigns", tags=["campaigns"])
+
+@router.get("/saved-filters", response_model=List[SavedFilterResponse])
+async def list_saved_filters(
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    result = await db.execute(
+        select(SavedFilter)
+        .where(SavedFilter.user_id == current_user.id)
+        .order_by(SavedFilter.created_at.desc())
+    )
+    return result.scalars().all()
+
+
+@router.post("/saved-filters", response_model=SavedFilterResponse, status_code=status.HTTP_201_CREATED)
+async def create_saved_filter(
+    payload: SavedFilterCreate,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    saved = SavedFilter(
+        user_id=current_user.id,
+        name=payload.name.strip(),
+        filters=payload.filters,
+    )
+    db.add(saved)
+    await db.commit()
+    await db.refresh(saved)
+    return saved
+
+
+@router.delete("/saved-filters/{filter_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_saved_filter(
+    filter_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    result = await db.execute(
+        select(SavedFilter)
+        .where(SavedFilter.id == filter_id, SavedFilter.user_id == current_user.id)
+    )
+    saved = result.scalars().first()
+    if not saved:
+        raise HTTPException(status_code=404, detail="Saved filter not found")
+    await db.delete(saved)
+    await db.commit()
+    return None
+
 
 @router.get("/meta")
 async def get_campaigns_meta(
@@ -465,6 +519,8 @@ async def report(
     end: Optional[date] = None,
     q: Optional[str] = None,
     state: List[str] = Query(default=None),
+    status: List[str] = Query(default=None),
+    delivery_status: Optional[str] = None,
     targeting_type: Optional[str] = None,
     health: Optional[str] = None,
     min_budget: Optional[float] = None,
@@ -515,16 +571,18 @@ async def report(
     }
     # Clean none entries
     metric_filters = {k: v for k, v in metric_filters.items() if v is not None}
+    active_states = state or status
 
     return await get_report(
-        db, account, start_date, end_date, q, state, targeting_type, health,
+        db, account, start_date, end_date, q, active_states, targeting_type, health,
         min_budget, max_budget, min_acos, max_acos, metric_filters,
-        sort, dir, page, page_size, export
+        sort, dir, page, page_size, export, delivery_status=delivery_status
     )
 
 @router.get("/summary")
 async def summary(
-    ads_account_id: int,
+    ads_account_id: Optional[int] = None,
+    campaign_id: Optional[int] = None,
     start: Optional[date] = None,
     end: Optional[date] = None,
     granularity: str = "day",
@@ -532,12 +590,19 @@ async def summary(
     db: AsyncSession = Depends(get_db), 
     current_user: User = Depends(get_current_user)
 ):
-    account = await assert_owned_account(db, ads_account_id, current_user)
+    if campaign_id is not None:
+        c = await load_owned_campaign(db, campaign_id, current_user)
+        account = await assert_owned_account(db, c.ads_account_id, current_user)
+    elif ads_account_id is not None:
+        account = await assert_owned_account(db, ads_account_id, current_user)
+    else:
+        raise HTTPException(status_code=400, detail="Either ads_account_id or campaign_id is required")
+
     today = today_for(account.marketplace)
     end_date = end or today
     start_date = start or (end_date - timedelta(days=7))
     
-    return await get_summary(db, account, start_date, end_date, granularity, compare=compare)
+    return await get_summary(db, account, start_date, end_date, granularity, compare=compare, campaign_id=campaign_id)
 
 @router.get("/alerts")
 async def alerts(
@@ -1270,6 +1335,8 @@ async def update_campaign(
             detail="Archived campaigns cannot be modified"
         )
 
+    updates_dict: dict[str, Any] = {}
+
     if payload.name is not None:
         trimmed = payload.name.strip()
         dup = (await db.execute(
@@ -1284,7 +1351,7 @@ async def update_campaign(
                 status_code=409,
                 detail=f"A campaign named '{trimmed}' already exists"
             )
-        c.name = trimmed
+        updates_dict["name"] = trimmed
 
     if payload.daily_budget is not None:
         min_b = rules["min_daily_budget"]
@@ -1298,7 +1365,23 @@ async def update_campaign(
                     "message": f"Daily budget must be between ₹{min_b:,.2f} and ₹{max_b:,.2f}"
                 }]
             )
-        c.daily_budget = b_val
+        updates_dict["daily_budget"] = b_val
+
+    if payload.state is not None:
+        updates_dict["state"] = payload.state
+
+    if payload.bidding_strategy is not None:
+        updates_dict["bidding_strategy"] = payload.bidding_strategy
+
+    new_start = payload.start_date if payload.start_date is not None else c.start_date
+    new_end = payload.end_date if payload.end_date is not None else c.end_date
+    if new_end and new_start and new_end < new_start:
+        raise HTTPException(status_code=422, detail=[{"field": "end_date", "message": "End date cannot be earlier than start date"}])
+
+    if payload.start_date is not None:
+        updates_dict["start_date"] = payload.start_date
+    if payload.end_date is not None or "end_date" in payload.model_fields_set:
+        updates_dict["end_date"] = payload.end_date
 
     if payload.placement_top_of_search_pct is not None:
         val = int(payload.placement_top_of_search_pct)
@@ -1339,43 +1422,18 @@ async def update_campaign(
         c.placement_rest_of_search_pct = val
         c.placement_rest_pct = val
 
-    new_start = payload.start_date if payload.start_date is not None else c.start_date
-    new_end = payload.end_date if payload.end_date is not None else c.end_date
-    if new_end and new_start and new_end < new_start:
-        raise HTTPException(status_code=422, detail=[{"field": "end_date", "message": "End date cannot be earlier than start date"}])
-
-    if payload.start_date is not None:
-        c.start_date = payload.start_date
-    if payload.end_date is not None:
-        c.end_date = payload.end_date
-
-    if payload.state is not None:
-        c.state = payload.state
-    if payload.bidding_strategy is not None:
-        c.bidding_strategy = payload.bidding_strategy
     if payload.portfolio_name is not None:
         c.portfolio_name = payload.portfolio_name
     if payload.negative_brands is not None:
         c.negative_brands = payload.negative_brands
 
-    t_spd = (await db.execute(
-        select(func.sum(MetricDaily.spend))
-        .where(MetricDaily.entity_type == "campaign", MetricDaily.entity_id == c.id, MetricDaily.date == today)
-    )).scalar() or 0.0
-
-    if c.state == "ARCHIVED":
-        c.delivery_status = "ARCHIVED"
-    elif c.state == "PAUSED":
-        c.delivery_status = "PAUSED"
-    elif c.end_date and c.end_date < today:
-        c.delivery_status = "ENDED"
-    elif t_spd >= c.daily_budget:
-        c.delivery_status = "OUT_OF_BUDGET"
+    if updates_dict:
+        provider = AmazonAdsProvider(db)
+        c = await provider.update_sp_campaign(account, c, updates_dict, user_id=current_user.id)
     else:
-        c.delivery_status = "DELIVERING"
+        await db.commit()
+        await db.refresh(c)
 
-    await db.commit()
-    await db.refresh(c)
     return c
 
 @router.put("/{campaign_id}/state")
@@ -1388,10 +1446,9 @@ async def update_campaign_state(
     c = await load_owned_campaign(db, campaign_id, current_user)
     if c.state == "ARCHIVED" and payload.state in ("ENABLED", "PAUSED"):
         raise HTTPException(400, "Cannot change state of archived campaign")
-    c.state = payload.state
-    await db.commit()
-    await db.refresh(c)
-    return c
+    account = (await db.execute(select(AdsAccount).where(AdsAccount.id == c.ads_account_id))).scalars().first()
+    provider = AmazonAdsProvider(db)
+    return await provider.update_sp_campaign(account, c, {"state": payload.state}, user_id=current_user.id)
 
 @router.post("/{campaign_id}/duplicate")
 async def duplicate_campaign(
@@ -1503,6 +1560,10 @@ async def get_campaign_ad_groups(
         .subquery()
     )
     
+    prod_count = (await db.execute(
+        select(func.count(CampaignProduct.product_id)).where(CampaignProduct.campaign_id == c.id)
+    )).scalar() or 0
+
     res = []
     for ag in ad_groups:
         row = (await db.execute(select(metric_sq).where(metric_sq.c.ag_id == ag.id))).first()
@@ -1517,6 +1578,7 @@ async def get_campaign_ad_groups(
             "name": ag.name,
             "state": ag.state,
             "default_bid": ag.default_bid,
+            "products_count": prod_count,
             **derive(m)
         })
         
@@ -2276,3 +2338,136 @@ async def get_campaign_history(
 
     events.sort(key=lambda x: x["created_at"] or "", reverse=True)
     return events
+
+
+# ---------------------------------------------------------------------------
+# Bid Threshold Endpoints (Phase 5 / D9)
+# ---------------------------------------------------------------------------
+
+@router.get("/{campaign_id}/bid-threshold", response_model=Optional[BidThresholdOut])
+async def get_campaign_bid_threshold(
+    campaign_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    campaign = await load_owned_campaign(db, campaign_id, current_user)
+    stmt = select(CampaignBidThreshold).where(CampaignBidThreshold.campaign_id == campaign.id)
+    res = await db.execute(stmt)
+    bt = res.scalars().first()
+    if not bt:
+        return None
+    return BidThresholdOut(
+        id=bt.id,
+        campaign_id=bt.campaign_id,
+        min_bid=bt.min_bid,
+        max_bid=bt.max_bid,
+        target_acos=bt.target_acos,
+        updated_at=bt.updated_at,
+        updated_by=bt.updated_by,
+    )
+
+
+@router.put("/{campaign_id}/bid-threshold", response_model=BidThresholdOut)
+async def put_campaign_bid_threshold(
+    campaign_id: int,
+    payload: BidThresholdIn,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    campaign = await load_owned_campaign(db, campaign_id, current_user)
+
+    stmt = select(CampaignBidThreshold).where(CampaignBidThreshold.campaign_id == campaign.id)
+    res = await db.execute(stmt)
+    bt = res.scalars().first()
+
+    old_values = {
+        "min_bid": bt.min_bid if bt else None,
+        "max_bid": bt.max_bid if bt else None,
+        "target_acos": bt.target_acos if bt else None,
+    }
+
+    if not bt:
+        bt = CampaignBidThreshold(
+            campaign_id=campaign.id,
+            min_bid=payload.min_bid,
+            max_bid=payload.max_bid,
+            target_acos=payload.target_acos,
+            updated_by=current_user.id,
+        )
+        db.add(bt)
+    else:
+        bt.min_bid = payload.min_bid
+        bt.max_bid = payload.max_bid
+        bt.target_acos = payload.target_acos
+        bt.updated_by = current_user.id
+
+    if payload.target_acos is not None:
+        campaign.target_acos = payload.target_acos
+
+    new_values = {
+        "min_bid": payload.min_bid,
+        "max_bid": payload.max_bid,
+        "target_acos": payload.target_acos,
+    }
+
+    min_str = f"₹{payload.min_bid:.2f}" if payload.min_bid is not None else "None"
+    max_str = f"₹{payload.max_bid:.2f}" if payload.max_bid is not None else "None"
+    acos_str = f"{payload.target_acos:.1f}%" if payload.target_acos is not None else "None"
+    desc = f"Updated bid thresholds: Min: {min_str}, Max: {max_str}, Target ACOS: {acos_str} (Saved in AdsManager)"
+
+    history_entry = CampaignHistory(
+        campaign_id=campaign.id,
+        event_type="BID_THRESHOLD_UPDATE",
+        event_title="Bid Thresholds Updated",
+        description=desc,
+        previous_value=json.dumps(old_values),
+        new_value=json.dumps(new_values),
+        user_id=current_user.id,
+    )
+    db.add(history_entry)
+
+    await db.commit()
+    await db.refresh(bt)
+
+    return BidThresholdOut(
+        id=bt.id,
+        campaign_id=bt.campaign_id,
+        min_bid=bt.min_bid,
+        max_bid=bt.max_bid,
+        target_acos=bt.target_acos,
+        updated_at=bt.updated_at,
+        updated_by=bt.updated_by,
+    )
+
+
+@router.delete("/{campaign_id}/bid-threshold", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_campaign_bid_threshold(
+    campaign_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    campaign = await load_owned_campaign(db, campaign_id, current_user)
+    stmt = select(CampaignBidThreshold).where(CampaignBidThreshold.campaign_id == campaign.id)
+    res = await db.execute(stmt)
+    bt = res.scalars().first()
+
+    if bt:
+        old_values = {
+            "min_bid": bt.min_bid,
+            "max_bid": bt.max_bid,
+            "target_acos": bt.target_acos,
+        }
+        await db.delete(bt)
+
+        history_entry = CampaignHistory(
+            campaign_id=campaign.id,
+            event_type="BID_THRESHOLD_UPDATE",
+            event_title="Bid Thresholds Cleared",
+            description="Cleared bid thresholds in AdsManager",
+            previous_value=json.dumps(old_values),
+            new_value=None,
+            user_id=current_user.id,
+        )
+        db.add(history_entry)
+        await db.commit()
+    return None

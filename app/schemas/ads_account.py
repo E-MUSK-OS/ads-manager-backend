@@ -17,6 +17,7 @@ class AdsAccountResponse(AdsAccountBase):
     amazon_account_name: Optional[str] = None
     last_synced_at: Optional[datetime] = None
     connection_status: str = "connected"
+    sync_status: str = "idle"
     is_active: bool = True
     created_at: datetime
     

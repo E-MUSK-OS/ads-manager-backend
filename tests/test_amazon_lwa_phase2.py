@@ -482,7 +482,7 @@ async def test_connect_amazon_rejects_non_mock_provider(client_a):
 
 @pytest.mark.asyncio
 async def test_sync_account_converts_not_implemented_to_501(client_a, db_session, account_a, monkeypatch):
-    async def mock_sync(self, account_id):
+    async def mock_sync(self, account_id, *args, **kwargs):
         raise NotImplementedError("Live Amazon sync is not implemented yet.")
 
     monkeypatch.setattr(AmazonAdsProvider, "sync_account_data", mock_sync)

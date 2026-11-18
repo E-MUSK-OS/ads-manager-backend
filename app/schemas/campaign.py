@@ -1,6 +1,6 @@
 from pydantic import BaseModel, Field, field_validator, model_validator
 from typing import Optional, Literal
-from datetime import date
+from datetime import date, datetime
 import re
 from app.core.marketplace_rules import KEYWORD_MAX_LEN, KEYWORD_MAX_WORDS, KEYWORD_FORBIDDEN, ASIN_RE
 
@@ -311,3 +311,38 @@ class CampaignCreateResult(BaseModel):
     state: str
     status_label: str
     warnings: list = []
+
+
+class BidThresholdIn(BaseModel):
+    min_bid: Optional[float] = None
+    max_bid: Optional[float] = None
+    target_acos: Optional[float] = None
+
+    @field_validator("min_bid", "max_bid")
+    def validate_positive_bid(cls, v):
+        if v is not None and v < 0:
+            raise ValueError("Bid must be greater than or equal to 0")
+        return v
+
+    @field_validator("target_acos")
+    def validate_target_acos(cls, v):
+        if v is not None and (v < 0 or v > 100):
+            raise ValueError("Target ACOS must be between 0% and 100%")
+        return v
+
+    @model_validator(mode="after")
+    def validate_min_le_max(self):
+        if self.min_bid is not None and self.max_bid is not None and self.min_bid > self.max_bid:
+            raise ValueError("Minimum bid cannot exceed maximum bid")
+        return self
+
+
+class BidThresholdOut(BaseModel):
+    id: Optional[int] = None
+    campaign_id: int
+    min_bid: Optional[float] = None
+    max_bid: Optional[float] = None
+    target_acos: Optional[float] = None
+    updated_at: Optional[datetime] = None
+    updated_by: Optional[int] = None
+

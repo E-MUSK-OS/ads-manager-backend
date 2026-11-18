@@ -271,7 +271,8 @@ async def get_report(
     dir: str = "desc",
     page: int = 1,
     page_size: int = 50,
-    export: bool = False
+    export: bool = False,
+    delivery_status: Optional[str] = None,
 ):
     settings = await get_or_create_user_campaign_settings(db, account.user_id)
 
@@ -299,7 +300,9 @@ async def get_report(
     if q and q.strip():
         query = query.where(func.lower(Campaign.name).like(f"%{q.strip().lower()}%"))
     if state:
-        query = query.where(Campaign.state.in_(state))
+        query = query.where(Campaign.state.in_([s.upper() for s in state]))
+    if delivery_status:
+        query = query.where(func.upper(Campaign.delivery_status) == delivery_status.upper())
     if targeting_type:
         query = query.where(Campaign.targeting_type == targeting_type)
     if min_budget is not None:
@@ -538,8 +541,16 @@ async def get_summary(
     start: date,
     end: date,
     granularity: str = "day",
-    compare: bool = False
+    compare: bool = False,
+    campaign_id: Optional[int] = None
 ):
+    granularity_norm = "day"
+    g_lower = (granularity or "day").lower()
+    if g_lower in ("week", "weekly"):
+        granularity_norm = "week"
+    elif g_lower in ("month", "monthly"):
+        granularity_norm = "month"
+
     query = (
         select(MetricDaily)
         .join(Campaign, Campaign.id == MetricDaily.entity_id)
@@ -550,14 +561,16 @@ async def get_summary(
             MetricDaily.date <= end
         )
     )
+    if campaign_id is not None:
+        query = query.where(Campaign.id == campaign_id)
     rows = (await db.execute(query)).scalars().all()
 
     buckets = {}
 
     def get_bucket_date(d: date):
-        if granularity == "week":
+        if granularity_norm == "week":
             return d - timedelta(days=d.weekday())
-        elif granularity == "month":
+        elif granularity_norm == "month":
             return d.replace(day=1)
         return d
 
@@ -577,14 +590,24 @@ async def get_summary(
     end_bucket = get_bucket_date(end)
     while current <= end_bucket:
         b = buckets.get(current, {"impressions":0, "clicks":0, "spend":0.0, "sales":0.0, "orders":0, "organic_sales":0.0})
+        
+        if granularity_norm == "month":
+            bucket_str = current.strftime("%b %Y")
+        elif granularity_norm == "week":
+            week_end = current + timedelta(days=6)
+            bucket_str = f"{current.strftime('%d %b')} – {week_end.strftime('%d %b')}"
+        else:
+            bucket_str = current.isoformat()
+
         series.append({
             "date": current.isoformat(),
+            "bucket": bucket_str,
             **derive(b)
         })
-        if granularity == "month":
+        if granularity_norm == "month":
             if current.month == 12: current = current.replace(year=current.year+1, month=1)
             else: current = current.replace(month=current.month+1)
-        elif granularity == "week": current += timedelta(days=7)
+        elif granularity_norm == "week": current += timedelta(days=7)
         else: current += timedelta(days=1)
 
     # totals
@@ -607,6 +630,8 @@ async def get_summary(
             MetricDaily.date <= prev_end
         )
     )
+    if campaign_id is not None:
+        prev_query = prev_query.where(Campaign.id == campaign_id)
     prev_rows = (await db.execute(prev_query)).scalars().all()
     prev_dict = {"impressions":0, "clicks":0, "spend":0.0, "sales":0.0, "orders":0, "organic_sales":0.0}
     for r in prev_rows:
@@ -654,14 +679,23 @@ async def get_summary(
         raw_prev = []
         while prev_current <= prev_end_bucket:
             pb = prev_buckets.get(prev_current, {"impressions":0, "clicks":0, "spend":0.0, "sales":0.0, "orders":0, "organic_sales":0.0})
+            if granularity_norm == "month":
+                prev_bucket_str = prev_current.strftime("%b %Y")
+            elif granularity_norm == "week":
+                prev_week_end = prev_current + timedelta(days=6)
+                prev_bucket_str = f"{prev_current.strftime('%d %b')} – {prev_week_end.strftime('%d %b')}"
+            else:
+                prev_bucket_str = prev_current.isoformat()
+
             raw_prev.append({
                 "date": prev_current.isoformat(),
+                "bucket": prev_bucket_str,
                 **derive(pb)
             })
-            if granularity == "month":
+            if granularity_norm == "month":
                 if prev_current.month == 12: prev_current = prev_current.replace(year=prev_current.year+1, month=1)
                 else: prev_current = prev_current.replace(month=prev_current.month+1)
-            elif granularity == "week": prev_current += timedelta(days=7)
+            elif granularity_norm == "week": prev_current += timedelta(days=7)
             else: prev_current += timedelta(days=1)
 
         target_len = len(series)
