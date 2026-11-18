@@ -1,7 +1,7 @@
 import pytest
 from sqlalchemy import select, func
 from app.core.marketplace_rules import compute_max_effective_bid, MARKETPLACE_RULES, marketplace_or_in
-from app.providers.ads.mock_provider import MockAdsProvider
+from tests.factories import TestAdsDataSeeder as MockAdsProvider
 from app.models.campaign import Campaign
 from app.models.metric_daily import MetricDaily
 from app.models.placement_metric_daily import PlacementMetricDaily

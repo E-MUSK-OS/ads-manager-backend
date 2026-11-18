@@ -4,7 +4,7 @@ from datetime import date, timedelta
 from sqlalchemy import select
 from app.models.campaign import Campaign
 from app.models.metric_daily import MetricDaily
-from app.providers.ads.mock_provider import MockAdsProvider
+from tests.factories import TestAdsDataSeeder as MockAdsProvider
 
 @pytest.mark.asyncio
 async def test_campaigns_hub_weighted_summary_and_sorting(client_a: AsyncClient, account_a, db_session):

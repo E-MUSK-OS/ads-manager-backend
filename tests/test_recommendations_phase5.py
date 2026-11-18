@@ -12,7 +12,7 @@ from app.models.placement_metric_daily import PlacementMetricDaily
 from app.models.recommendation import Recommendation
 from app.models.recommendation_rule import RecommendationRule
 from app.models.user import User
-from app.providers.ads.mock_provider import (
+from tests.factories import (
     MockAdsProvider,
     split_campaign_metrics_to_placements,
     backfill_placement_metrics,

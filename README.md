@@ -20,8 +20,8 @@ SUPPORTED_MARKETPLACES=IN                               # Comma-separated allowe
 CONTACT_RETENTION_DAYS=365                              # Retention window for contact form inquiries
 
 
-# Amazon LWA (only required when ADS_PROVIDER=amazon)
-ADS_PROVIDER=mock                                       # mock | amazon
+# Amazon LWA Credentials
+ADS_PROVIDER=amazon
 AMAZON_LWA_CLIENT_ID=<your-lwa-client-id>
 AMAZON_LWA_CLIENT_SECRET=<your-lwa-client-secret>
 AMAZON_LWA_REDIRECT_URI=http://localhost:3000/connect-amazon/callback
@@ -33,7 +33,7 @@ AMAZON_ADS_REGION=eu                                    # na | eu | fe — TODO(
 - `JWT_ACCESS_TOKEN_EXPIRE_MINUTES`: Access token TTL in minutes (default 30).
 - `JWT_REFRESH_TOKEN_EXPIRE_DAYS`: Refresh token TTL in days (default 30).
 - `FRONTEND_URL`: Frontend origin(s) used for CORS — replaces the old `ALLOWED_ORIGINS` name.
-- `ADS_PROVIDER`: `mock` (default, no Amazon credentials needed) or `amazon` (requires LWA creds below).
+- `ADS_PROVIDER`: `amazon` (default; only official Amazon Ads API is supported).
 - `AMAZON_LWA_CLIENT_ID` / `AMAZON_LWA_CLIENT_SECRET`: From your Login with Amazon Security Profile.
 - `TOKEN_ENCRYPTION_KEY`: Fernet key used to encrypt stored refresh tokens at rest.
 

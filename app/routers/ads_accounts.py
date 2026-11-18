@@ -29,58 +29,15 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/ads-accounts", tags=["ads-accounts"])
 
-class ConnectAccountRequest(BaseModel):
-    marketplace: str = "IN"
-
-
 @router.get("/provider-mode")
 async def get_provider_mode():
     """
-    Return whether the backend is operating in mock/demo mode or live Amazon Ads mode.
+    Return the ads provider configuration.
     """
     return {
-        "provider": settings.ADS_PROVIDER.lower(),
+        "provider": "amazon",
         "region": settings.AMAZON_ADS_REGION.lower(),
     }
-
-
-@router.post("/connect", response_model=AdsAccountResponse)
-async def connect_amazon(
-    payload: ConnectAccountRequest,
-    db: AsyncSession = Depends(get_db), 
-    current_user: User = Depends(get_current_user)
-):
-    """
-    Connects a mock or development account and populates initial data.
-    """
-    if settings.ADS_PROVIDER.lower() != "mock":
-        raise HTTPException(
-            status_code=400,
-            detail="Live mode: connect through Login with Amazon (GET /ads-accounts/amazon/authorize-url).",
-        )
-
-    marketplace = payload.marketplace.upper()
-    if marketplace not in MARKETPLACE_RULES:
-        raise HTTPException(400, "Unsupported marketplace")
-    
-    is_mock = True
-    account = AdsAccount(
-        user_id=current_user.id,
-        marketplace=marketplace,
-        is_mock=is_mock,
-        connection_status="connected",
-    )
-    db.add(account)
-    await db.commit()
-    await db.refresh(account)
-    
-    provider = get_ads_provider(db, account)
-    try:
-        await provider.generate_for_new_connection(account.id)
-    except NotImplementedError:
-        pass
-    
-    return account
 
 
 @router.get("", response_model=list[AdsAccountResponse])

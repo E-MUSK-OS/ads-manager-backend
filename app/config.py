@@ -26,8 +26,8 @@ AMAZON_REGIONAL_ENDPOINTS = {
 class Settings(BaseSettings):
     # App
     ENVIRONMENT: str = "development"
-    ADS_PROVIDER: str = "mock"
-    LLM_PROVIDER: str = "claude"
+    ADS_PROVIDER: str = "amazon"
+    LLM_PROVIDER: str = "none"
     FRONTEND_URL: str = "http://localhost:3000"
     RECOMMENDATION_ENGINE: str = "rules"
     SUPPORTED_MARKETPLACES: str = "IN"
@@ -97,25 +97,18 @@ class Settings(BaseSettings):
         ):
             raise ValueError("JWT_SECRET_KEY must be configured and cannot be 'changeme' or the default placeholder")
 
-        strict = self.ENVIRONMENT.lower() == "production" or self.ADS_PROVIDER.lower() != "mock"
-        if strict:
-            if len(self.JWT_SECRET_KEY) < 32:
-                raise ValueError("JWT_SECRET_KEY must be at least 32 characters in production or non-mock mode")
+        if self.ADS_PROVIDER.lower() == "mock":
+            self.ADS_PROVIDER = "amazon"
 
         if self.ENVIRONMENT.lower() == "production":
+            if len(self.JWT_SECRET_KEY) < 32:
+                raise ValueError("JWT_SECRET_KEY must be at least 32 characters in production")
+
             origins = [o.strip() for o in self.FRONTEND_URL.split(",") if o.strip()]
             for origin in origins:
                 if not origin.startswith("https://"):
                     raise ValueError(f"FRONTEND_URL origin '{origin}' must start with 'https://' in production")
 
-        # Ensure AMAZON_ADS_API_BASE_URL has a value if accessed directly
-        if not self.AMAZON_ADS_API_BASE_URL:
-            region = self.AMAZON_ADS_REGION.lower()
-            endpoints = AMAZON_REGIONAL_ENDPOINTS.get(region, AMAZON_REGIONAL_ENDPOINTS["eu"])
-            self.AMAZON_ADS_API_BASE_URL = endpoints["ads_api_base_url"]
-
-        # Fail fast if ADS_PROVIDER is amazon and credentials/keys are missing
-        if self.ADS_PROVIDER.lower() == "amazon":
             missing = []
             if not self.AMAZON_LWA_CLIENT_ID:
                 missing.append("AMAZON_LWA_CLIENT_ID")
@@ -127,8 +120,14 @@ class Settings(BaseSettings):
                 missing.append("TOKEN_ENCRYPTION_KEY")
             if missing:
                 raise ValueError(
-                    f"Fast-fail startup error: ADS_PROVIDER='amazon' requires: {', '.join(missing)}"
+                    f"Fast-fail startup error: production mode requires: {', '.join(missing)}"
                 )
+
+        # Ensure AMAZON_ADS_API_BASE_URL has a value if accessed directly
+        if not self.AMAZON_ADS_API_BASE_URL:
+            region = self.AMAZON_ADS_REGION.lower()
+            endpoints = AMAZON_REGIONAL_ENDPOINTS.get(region, AMAZON_REGIONAL_ENDPOINTS["eu"])
+            self.AMAZON_ADS_API_BASE_URL = endpoints["ads_api_base_url"]
 
         return self
 

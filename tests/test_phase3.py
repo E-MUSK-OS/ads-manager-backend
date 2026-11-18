@@ -10,7 +10,7 @@ from app.models.negative_keyword import NegativeKeyword
 from app.models.target import Target
 from app.models.placement_metric_daily import PlacementMetricDaily
 from app.models.metric_daily import MetricDaily
-from app.providers.ads.mock_provider import MockAdsProvider
+from tests.factories import TestAdsDataSeeder as MockAdsProvider
 from app.core.marketplace_rules import compute_max_effective_bid
 
 

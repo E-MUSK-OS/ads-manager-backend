@@ -6,7 +6,7 @@ except ImportError:
     from backports.zoneinfo import ZoneInfo
 
 KEYWORD_MAX_LEN, KEYWORD_MAX_WORDS = 80, 10
-KEYWORD_FORBIDDEN = set('!@%^()={};~`<>?\\|')      # ASSUMPTIONS for MockAdsProvider
+KEYWORD_FORBIDDEN = set('!@%^()={};~`<>?\\|')      # Amazon Sponsored Products keyword forbidden characters
 ASIN_RE = r"^[A-Z0-9]{10}$"
 
 MARKETPLACE_RULES: dict[str, dict[str, Any]] = {

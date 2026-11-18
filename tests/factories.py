@@ -1,12 +1,17 @@
+"""Test factories and data seeders for isolated backend tests.
+
+These helpers and fixtures live STRICTLY under tests/ and must NEVER be imported
+or used by any application code in app/.
+"""
+
 import random
-from datetime import timedelta
 import string
-import math
+from datetime import timedelta
+from typing import Any
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, insert
 from sqlalchemy.orm import selectinload
 
-from app.providers.ads.base import AdsProvider
 from app.models.ads_account import AdsAccount
 from app.models.campaign import Campaign
 from app.models.campaign_product import CampaignProduct
@@ -18,21 +23,25 @@ from app.models.metric_daily import MetricDaily
 from app.models.placement_metric_daily import PlacementMetricDaily
 from app.models.search_term import SearchTerm
 from app.models.product import Product
-from app.models.product_review import ProductReview
 from app.core.marketplace_rules import MARKETPLACE_RULES, today_for
 
-def split_int(value: int, parts: int):
-    if parts <= 0: return []
+
+def split_int(value: int, parts: int) -> list[int]:
+    if parts <= 0:
+        return []
     base = value // parts
     rem = value % parts
     return [base + 1 if i < rem else base for i in range(parts)]
 
-def split_float(value: float, parts: int):
-    if parts <= 0: return []
+
+def split_float(value: float, parts: int) -> list[float]:
+    if parts <= 0:
+        return []
     base = round(value / parts, 2)
     res = [base] * parts
     res[-1] = round(value - sum(res[:-1]), 2)
     return res
+
 
 def largest_remainder_split_int(total: int, weights: list[float]) -> list[int]:
     if total <= 0:
@@ -52,6 +61,7 @@ def largest_remainder_split_int(total: int, weights: list[float]) -> list[int]:
         res[indexed_remainders[i]] += 1
     return res
 
+
 def split_money_last_remainder(total: float, weights: list[float]) -> list[float]:
     if total <= 0:
         return [0.0] * len(weights)
@@ -67,6 +77,7 @@ def split_money_last_remainder(total: float, weights: list[float]) -> list[float
     parts.append(last_val)
     return parts
 
+
 def split_campaign_metrics_to_placements(
     impressions: int,
     clicks: int,
@@ -75,7 +86,6 @@ def split_campaign_metrics_to_placements(
     orders: int,
     noise_seed: int | None = None,
 ) -> dict[str, dict[str, Any]]:
-    # Split across TOP_OF_SEARCH (45%), REST_OF_SEARCH (35%), PRODUCT_PAGES (20%)
     weights = [0.45, 0.35, 0.20]
 
     split_imps = largest_remainder_split_int(impressions, weights)
@@ -97,19 +107,23 @@ def split_campaign_metrics_to_placements(
         }
     return res
 
-class MockAdsProvider(AdsProvider):
+
+def generate_test_asin() -> str:
+    return "B0" + "".join(random.choices(string.ascii_uppercase + string.digits, k=8))
+
+
+def generate_test_sku() -> str:
+    return "SKU-" + "".join(random.choices(string.ascii_uppercase + string.digits, k=6))
+
+
+class TestAdsDataSeeder:
+    """Fixture generator used exclusively in test suites to populate test DB."""
+
     def __init__(self, db: AsyncSession):
         self.db = db
 
-    def generate_asin(self):
-        return "B0" + "".join(random.choices(string.ascii_uppercase + string.digits, k=8))
-
-    def generate_sku(self):
-        return "SKU-" + "".join(random.choices(string.ascii_uppercase + string.digits, k=6))
-
     async def generate_for_new_connection(self, ads_account_id: int):
         account = (await self.db.execute(select(AdsAccount).where(AdsAccount.id == ads_account_id))).scalars().first()
-        rules = MARKETPLACE_RULES[account.marketplace]
         today = today_for(account.marketplace)
 
         products = []
@@ -117,12 +131,12 @@ class MockAdsProvider(AdsProvider):
         for i in range(8):
             p = Product(
                 ads_account_id=ads_account_id,
-                asin=self.generate_asin(),
-                sku=self.generate_sku(),
-                title=f"Mock Product {i} Premium",
+                asin=generate_test_asin(),
+                sku=generate_test_sku(),
+                title=f"Test Product {i} Premium",
                 image_url=f"https://via.placeholder.com/150?text=Product+{i}",
                 category=categories[i % len(categories)],
-                price=round(random.uniform(15.0, 150.0), 2)
+                price=round(random.uniform(15.0, 150.0), 2),
             )
             self.db.add(p)
             products.append(p)
@@ -130,7 +144,7 @@ class MockAdsProvider(AdsProvider):
 
         campaign_configs = [
             {
-                "name": "Mock Winning Bestseller Campaign 0 (MANUAL)",
+                "name": "Test Winning Bestseller Campaign 0 (MANUAL)",
                 "campaign_type": "SPONSORED_PRODUCTS",
                 "targeting_type": "MANUAL",
                 "portfolio_name": "Bestsellers",
@@ -144,7 +158,7 @@ class MockAdsProvider(AdsProvider):
                 "profile": "winning",
             },
             {
-                "name": "Mock Winning Festive Auto Campaign 1 (AUTO)",
+                "name": "Test Winning Festive Auto Campaign 1 (AUTO)",
                 "campaign_type": "SPONSORED_PRODUCTS",
                 "targeting_type": "AUTO",
                 "portfolio_name": "Festive Sale",
@@ -158,7 +172,7 @@ class MockAdsProvider(AdsProvider):
                 "profile": "winning",
             },
             {
-                "name": "Mock Bleeding New Launches Campaign 2 (MANUAL)",
+                "name": "Test Bleeding New Launches Campaign 2 (MANUAL)",
                 "campaign_type": "SPONSORED_PRODUCTS",
                 "targeting_type": "MANUAL",
                 "portfolio_name": "New Launches",
@@ -172,7 +186,7 @@ class MockAdsProvider(AdsProvider):
                 "profile": "bleeding",
             },
             {
-                "name": "Mock Bleeding Festive Brands Campaign 3 (MANUAL)",
+                "name": "Test Bleeding Festive Brands Campaign 3 (MANUAL)",
                 "campaign_type": "SPONSORED_BRANDS",
                 "targeting_type": "MANUAL",
                 "portfolio_name": "Festive Sale",
@@ -186,7 +200,7 @@ class MockAdsProvider(AdsProvider):
                 "profile": "bleeding",
             },
             {
-                "name": "Mock Out of Budget Campaign 4 (MANUAL)",
+                "name": "Test Out of Budget Campaign 4 (MANUAL)",
                 "campaign_type": "SPONSORED_PRODUCTS",
                 "targeting_type": "MANUAL",
                 "portfolio_name": "Bestsellers",
@@ -200,7 +214,7 @@ class MockAdsProvider(AdsProvider):
                 "profile": "out_of_budget",
             },
             {
-                "name": "Mock Paused Display Campaign 5 (MANUAL)",
+                "name": "Test Paused Display Campaign 5 (MANUAL)",
                 "campaign_type": "SPONSORED_DISPLAY",
                 "targeting_type": "MANUAL",
                 "portfolio_name": "New Launches",
@@ -214,7 +228,7 @@ class MockAdsProvider(AdsProvider):
                 "profile": "paused",
             },
             {
-                "name": "Mock Archived Campaign 6 (MANUAL)",
+                "name": "Test Archived Campaign 6 (MANUAL)",
                 "campaign_type": "SPONSORED_PRODUCTS",
                 "targeting_type": "MANUAL",
                 "portfolio_name": "Festive Sale",
@@ -228,7 +242,7 @@ class MockAdsProvider(AdsProvider):
                 "profile": "ended",
             },
             {
-                "name": "Mock Leaking Campaign 7 (MANUAL)",
+                "name": "Test Leaking Campaign 7 (MANUAL)",
                 "campaign_type": "SPONSORED_PRODUCTS",
                 "targeting_type": "MANUAL",
                 "portfolio_name": "Bestsellers",
@@ -242,7 +256,7 @@ class MockAdsProvider(AdsProvider):
                 "profile": "leaking",
             },
             {
-                "name": "Mock High Acos Campaign 8 (MANUAL)",
+                "name": "Test High Acos Campaign 8 (MANUAL)",
                 "campaign_type": "SPONSORED_BRANDS",
                 "targeting_type": "MANUAL",
                 "portfolio_name": "Festive Sale",
@@ -256,7 +270,7 @@ class MockAdsProvider(AdsProvider):
                 "profile": "high_acos",
             },
             {
-                "name": "Mock Efficient Display Campaign 9 (MANUAL)",
+                "name": "Test Efficient Display Campaign 9 (MANUAL)",
                 "campaign_type": "SPONSORED_DISPLAY",
                 "targeting_type": "MANUAL",
                 "portfolio_name": "New Launches",
@@ -280,11 +294,11 @@ class MockAdsProvider(AdsProvider):
             if profile == "ended":
                 start_date = today - timedelta(days=60)
                 end_date = today - timedelta(days=10)
-            
+
             c = Campaign(
                 ads_account_id=ads_account_id,
                 amazon_campaign_id=f"amzn_c_{ads_account_id}_{i}",
-                external_id=f"mock_c_{ads_account_id}_{i}",
+                external_id=f"test_c_{ads_account_id}_{i}",
                 name=cfg["name"],
                 campaign_type=cfg["campaign_type"],
                 targeting_type=cfg["targeting_type"],
@@ -312,11 +326,11 @@ class MockAdsProvider(AdsProvider):
             c.product_id = p.id
             cp = CampaignProduct(campaign_id=c.id, product_id=p.id)
             self.db.add(cp)
-            
+
             ag = AdGroup(campaign_id=c.id, name="Main Ad Group", default_bid=15.0)
             self.db.add(ag)
             await self.db.flush()
-            
+
             c_name_lower = c.name.lower()
             if c.targeting_type == "MANUAL":
                 match_types = ["BROAD", "PHRASE", "EXACT"]
@@ -335,13 +349,13 @@ class MockAdsProvider(AdsProvider):
                         keyword_text=kw_text,
                         match_type=m_type,
                         bid=round(random.uniform(8.0, 35.0), 2),
-                        state="ENABLED"
+                        state="ENABLED",
                     )
                     self.db.add(kw)
 
                 # Product ASIN Targets
                 for _ in range(2):
-                    t_asin = self.generate_asin()
+                    t_asin = generate_test_asin()
                     tg = Target(
                         campaign_id=c.id,
                         ad_group_id=ag.id,
@@ -351,7 +365,7 @@ class MockAdsProvider(AdsProvider):
                         kind="ASIN",
                         value=t_asin,
                         bid=round(random.uniform(10.0, 25.0), 2),
-                        state="ENABLED"
+                        state="ENABLED",
                     )
                     self.db.add(tg)
 
@@ -370,10 +384,10 @@ class MockAdsProvider(AdsProvider):
                         kind="AUTO_GROUP",
                         value=val,
                         bid=b_val,
-                        state="ENABLED"
+                        state="ENABLED",
                     )
                     self.db.add(tg)
-                
+
         await self.db.commit()
         await self.sync_account_data(ads_account_id)
 
@@ -381,32 +395,39 @@ class MockAdsProvider(AdsProvider):
         account = (await self.db.execute(select(AdsAccount).where(AdsAccount.id == ads_account_id))).scalars().first()
         rules = MARKETPLACE_RULES[account.marketplace]
         today = today_for(account.marketplace)
-        
-        # Load campaigns with ad_groups and their keywords/targets
-        c_result = await self.db.execute(select(Campaign).where(Campaign.ads_account_id == ads_account_id).options(
-            selectinload(Campaign.product)
-        ))
+
+        c_result = await self.db.execute(
+            select(Campaign).where(Campaign.ads_account_id == ads_account_id).options(selectinload(Campaign.product))
+        )
         campaigns = c_result.scalars().all()
-        
-        m_result = await self.db.execute(select(MetricDaily.entity_id, MetricDaily.date).where(
-            MetricDaily.entity_type == "campaign", 
-            MetricDaily.entity_id.in_([c.id for c in campaigns])
-        ))
+
+        m_result = await self.db.execute(
+            select(MetricDaily.entity_id, MetricDaily.date).where(
+                MetricDaily.entity_type == "campaign", MetricDaily.entity_id.in_([c.id for c in campaigns])
+            )
+        )
         existing_metrics = set((row[0], row[1]) for row in m_result.all())
-        
+
         rows = []
         placement_rows = []
         for c in campaigns:
             c_name_lower = c.name.lower()
             profile = "average"
-            if "winning" in c_name_lower: profile = "winning"
-            elif "leaking" in c_name_lower: profile = "leaking"
-            elif "bleeding" in c_name_lower: profile = "bleeding"
-            elif "out of budget" in c_name_lower: profile = "out_of_budget"
-            elif "high_acos" in c_name_lower or "high acos" in c_name_lower: profile = "high_acos"
-            elif "efficient" in c_name_lower: profile = "efficient"
-            elif "new" in c_name_lower: profile = "new"
-            
+            if "winning" in c_name_lower:
+                profile = "winning"
+            elif "leaking" in c_name_lower:
+                profile = "leaking"
+            elif "bleeding" in c_name_lower:
+                profile = "bleeding"
+            elif "out of budget" in c_name_lower:
+                profile = "out_of_budget"
+            elif "high_acos" in c_name_lower or "high acos" in c_name_lower:
+                profile = "high_acos"
+            elif "efficient" in c_name_lower:
+                profile = "efficient"
+            elif "new" in c_name_lower:
+                profile = "new"
+
             p_price = c.product.price if c.product else 50.0
 
             ag_res = await self.db.execute(select(AdGroup).where(AdGroup.campaign_id == c.id))
@@ -414,16 +435,20 @@ class MockAdsProvider(AdsProvider):
 
             for i in range(90):
                 d = today - timedelta(days=i)
-                if (c.id, d) in existing_metrics: continue
-                if d < c.start_date: continue
-                if c.end_date and d > c.end_date: continue
+                if (c.id, d) in existing_metrics:
+                    continue
+                if d < c.start_date:
+                    continue
+                if c.end_date and d > c.end_date:
+                    continue
                 if c.state in ("PAUSED", "ARCHIVED") and d > c.updated_at.date():
-                     if random.random() > 0.1: continue
+                    if random.random() > 0.1:
+                        continue
 
                 if profile == "winning" and i < 30:
                     orders = 3
                     sales = round(orders * p_price * 1.0, 2)
-                    spend = round(sales / 5.5, 2)  # ROAS = 5.5 >= 4, ACOS ~ 18% <= 20%
+                    spend = round(sales / 5.5, 2)
                     clicks = max(orders, 10)
                     impressions = clicks * 40
                     organic_sales = round(sales * 1.2, 2)
@@ -468,11 +493,17 @@ class MockAdsProvider(AdsProvider):
                     orders = sum(1 for _ in range(clicks) if random.random() < cvr)
                     sales = round(orders * p_price * random.uniform(0.95, 1.05), 2)
                     organic_sales = round(sales * random.uniform(0.8, 2.5), 2)
-                
+
                 rows.append({
-                    "date": d, "entity_type": "campaign", "entity_id": c.id,
-                    "impressions": impressions, "clicks": clicks, "spend": spend,
-                    "sales": sales, "orders": orders, "organic_sales": organic_sales
+                    "date": d,
+                    "entity_type": "campaign",
+                    "entity_id": c.id,
+                    "impressions": impressions,
+                    "clicks": clicks,
+                    "spend": spend,
+                    "sales": sales,
+                    "orders": orders,
+                    "organic_sales": organic_sales,
                 })
 
                 p_splits = split_campaign_metrics_to_placements(
@@ -494,9 +525,9 @@ class MockAdsProvider(AdsProvider):
                         "sales": p_data["sales"],
                         "orders": p_data["orders"],
                     })
-                
-                # split to ad groups
-                if not ad_groups: continue
+
+                if not ad_groups:
+                    continue
                 ag_imps = split_int(impressions, len(ad_groups))
                 ag_clks = split_int(clicks, len(ad_groups))
                 ag_spends = split_float(spend, len(ad_groups))
@@ -505,19 +536,30 @@ class MockAdsProvider(AdsProvider):
 
                 for ag_idx, ag in enumerate(ad_groups):
                     rows.append({
-                        "date": d, "entity_type": "ad_group", "entity_id": ag.id,
-                        "impressions": ag_imps[ag_idx], "clicks": ag_clks[ag_idx],
-                        "spend": ag_spends[ag_idx], "sales": ag_sales[ag_idx],
-                        "orders": ag_orders[ag_idx], "organic_sales": 0.0
+                        "date": d,
+                        "entity_type": "ad_group",
+                        "entity_id": ag.id,
+                        "impressions": ag_imps[ag_idx],
+                        "clicks": ag_clks[ag_idx],
+                        "spend": ag_spends[ag_idx],
+                        "sales": ag_sales[ag_idx],
+                        "orders": ag_orders[ag_idx],
+                        "organic_sales": 0.0,
                     })
 
-                    # split to keywords/targets
                     kw_res = await self.db.execute(select(Keyword).where(Keyword.ad_group_id == ag.id))
                     keywords = kw_res.scalars().all()
                     if not keywords:
                         continue
 
-                    special_kw = next((kw for kw in keywords if kw.keyword_text.startswith(("bleeding target", "high acos target", "efficient target"))), None)
+                    special_kw = next(
+                        (
+                            kw
+                            for kw in keywords
+                            if kw.keyword_text.startswith(("bleeding target", "high acos target", "efficient target"))
+                        ),
+                        None,
+                    )
                     if special_kw and special_kw.keyword_text.startswith("bleeding target"):
                         for kw in keywords:
                             if kw.id == special_kw.id:
@@ -525,17 +567,27 @@ class MockAdsProvider(AdsProvider):
                                 kw_imp = 20 if i < 30 else 0
                                 kw_sp = round(kw_c * rules["min_bid"] * 2.0, 2)
                                 rows.append({
-                                    "date": d, "entity_type": "keyword", "entity_id": kw.id,
-                                    "impressions": kw_imp, "clicks": kw_c,
-                                    "spend": kw_sp, "sales": 0.0,
-                                    "orders": 0, "organic_sales": 0.0
+                                    "date": d,
+                                    "entity_type": "keyword",
+                                    "entity_id": kw.id,
+                                    "impressions": kw_imp,
+                                    "clicks": kw_c,
+                                    "spend": kw_sp,
+                                    "sales": 0.0,
+                                    "orders": 0,
+                                    "organic_sales": 0.0,
                                 })
                             else:
                                 rows.append({
-                                    "date": d, "entity_type": "keyword", "entity_id": kw.id,
-                                    "impressions": 10, "clicks": 0,
-                                    "spend": 0.0, "sales": 0.0,
-                                    "orders": 0, "organic_sales": 0.0
+                                    "date": d,
+                                    "entity_type": "keyword",
+                                    "entity_id": kw.id,
+                                    "impressions": 10,
+                                    "clicks": 0,
+                                    "spend": 0.0,
+                                    "sales": 0.0,
+                                    "orders": 0,
+                                    "organic_sales": 0.0,
                                 })
                     elif special_kw and special_kw.keyword_text.startswith("high acos target"):
                         for kw in keywords:
@@ -546,39 +598,59 @@ class MockAdsProvider(AdsProvider):
                                 kw_ord = 1 if (i == 0) else 0
                                 kw_sal = 15.0 if (i == 0) else 0.0
                                 rows.append({
-                                    "date": d, "entity_type": "keyword", "entity_id": kw.id,
-                                    "impressions": kw_imp, "clicks": kw_c,
-                                    "spend": kw_sp, "sales": kw_sal,
-                                    "orders": kw_ord, "organic_sales": 0.0
+                                    "date": d,
+                                    "entity_type": "keyword",
+                                    "entity_id": kw.id,
+                                    "impressions": kw_imp,
+                                    "clicks": kw_c,
+                                    "spend": kw_sp,
+                                    "sales": kw_sal,
+                                    "orders": kw_ord,
+                                    "organic_sales": 0.0,
                                 })
                             else:
                                 rows.append({
-                                    "date": d, "entity_type": "keyword", "entity_id": kw.id,
-                                    "impressions": 10, "clicks": 0,
-                                    "spend": 0.0, "sales": 0.0,
-                                    "orders": 0, "organic_sales": 0.0
+                                    "date": d,
+                                    "entity_type": "keyword",
+                                    "entity_id": kw.id,
+                                    "impressions": 10,
+                                    "clicks": 0,
+                                    "spend": 0.0,
+                                    "sales": 0.0,
+                                    "orders": 0,
+                                    "organic_sales": 0.0,
                                 })
                     elif special_kw and special_kw.keyword_text.startswith("efficient target"):
                         for kw in keywords:
                             if kw.id == special_kw.id:
-                                is_active_day = (i < 30 and i % 3 == 0)
+                                is_active_day = i < 30 and i % 3 == 0
                                 kw_c = 2 if is_active_day else 0
                                 kw_imp = 35 if is_active_day else 0
                                 kw_sp = 2.0 if is_active_day else 0.0
                                 kw_ord = 1 if i in (0, 6, 12) else 0
                                 kw_sal = 50.0 if i in (0, 6, 12) else 0.0
                                 rows.append({
-                                    "date": d, "entity_type": "keyword", "entity_id": kw.id,
-                                    "impressions": kw_imp, "clicks": kw_c,
-                                    "spend": kw_sp, "sales": kw_sal,
-                                    "orders": kw_ord, "organic_sales": 0.0
+                                    "date": d,
+                                    "entity_type": "keyword",
+                                    "entity_id": kw.id,
+                                    "impressions": kw_imp,
+                                    "clicks": kw_c,
+                                    "spend": kw_sp,
+                                    "sales": kw_sal,
+                                    "orders": kw_ord,
+                                    "organic_sales": 0.0,
                                 })
                             else:
                                 rows.append({
-                                    "date": d, "entity_type": "keyword", "entity_id": kw.id,
-                                    "impressions": 10, "clicks": 0,
-                                    "spend": 0.0, "sales": 0.0,
-                                    "orders": 0, "organic_sales": 0.0
+                                    "date": d,
+                                    "entity_type": "keyword",
+                                    "entity_id": kw.id,
+                                    "impressions": 10,
+                                    "clicks": 0,
+                                    "spend": 0.0,
+                                    "sales": 0.0,
+                                    "orders": 0,
+                                    "organic_sales": 0.0,
                                 })
                     else:
                         num_kws = len(keywords)
@@ -590,28 +662,33 @@ class MockAdsProvider(AdsProvider):
 
                         for kw_idx, kw in enumerate(keywords):
                             rows.append({
-                                "date": d, "entity_type": "keyword", "entity_id": kw.id,
-                                "impressions": kw_imps[kw_idx], "clicks": kw_clks[kw_idx],
-                                "spend": kw_spends[kw_idx], "sales": kw_sales[kw_idx],
-                                "orders": kw_orders[kw_idx], "organic_sales": 0.0
+                                "date": d,
+                                "entity_type": "keyword",
+                                "entity_id": kw.id,
+                                "impressions": kw_imps[kw_idx],
+                                "clicks": kw_clks[kw_idx],
+                                "spend": kw_spends[kw_idx],
+                                "sales": kw_sales[kw_idx],
+                                "orders": kw_orders[kw_idx],
+                                "organic_sales": 0.0,
                             })
-                
+
         if rows:
             chunk_size = 5000
             for i in range(0, len(rows), chunk_size):
-                await self.db.execute(insert(MetricDaily), rows[i:i+chunk_size])
+                await self.db.execute(insert(MetricDaily), rows[i : i + chunk_size])
             await self.db.commit()
 
         if placement_rows:
             chunk_size = 5000
             for i in range(0, len(placement_rows), chunk_size):
-                await self.db.execute(insert(PlacementMetricDaily), placement_rows[i:i+chunk_size])
+                await self.db.execute(insert(PlacementMetricDaily), placement_rows[i : i + chunk_size])
             await self.db.commit()
 
-        # Ensure search terms exist with coherent orders & believable distribution
-        st_res = await self.db.execute(select(SearchTerm.id).where(
-            SearchTerm.campaign_id.in_([c.id for c in campaigns])
-        ).limit(1))
+        # Ensure search terms exist
+        st_res = await self.db.execute(
+            select(SearchTerm.id).where(SearchTerm.campaign_id.in_([c.id for c in campaigns])).limit(1)
+        )
         if not st_res.scalars().first():
             st_rows = []
             for c in campaigns:
@@ -637,18 +714,20 @@ class MockAdsProvider(AdsProvider):
                     "how to repair tutorial guide",
                 ]
                 for idx, term in enumerate(wasted_terms):
-                    st_rows.append(SearchTerm(
-                        date=today - timedelta(days=2 + idx * 3),
-                        search_term=term,
-                        campaign_id=c.id,
-                        ad_group_id=ag.id,
-                        keyword_id=kw.id,
-                        clicks=10 + idx,
-                        impressions=(10 + idx) * 20,
-                        spend=round(min_spend + (idx * 5.0), 2),
-                        sales=0.0,
-                        orders=0,
-                    ))
+                    st_rows.append(
+                        SearchTerm(
+                            date=today - timedelta(days=2 + idx * 3),
+                            search_term=term,
+                            campaign_id=c.id,
+                            ad_group_id=ag.id,
+                            keyword_id=kw.id,
+                            clicks=10 + idx,
+                            impressions=(10 + idx) * 20,
+                            spend=round(min_spend + (idx * 5.0), 2),
+                            sales=0.0,
+                            orders=0,
+                        )
+                    )
 
                 converting_terms = [
                     "best organic premium quality",
@@ -659,73 +738,60 @@ class MockAdsProvider(AdsProvider):
                 for idx, term in enumerate(converting_terms):
                     ord_cnt = 2 + idx
                     s_val = round(ord_cnt * p_price * 1.0, 2)
-                    sp_val = round(s_val * 0.18, 2)  # ACOS = 18% <= 30%
-                    st_rows.append(SearchTerm(
-                        date=today - timedelta(days=1 + idx * 4),
-                        search_term=term,
-                        campaign_id=c.id,
-                        ad_group_id=ag.id,
-                        keyword_id=kw.id,
-                        clicks=max(ord_cnt, 5 + idx),
-                        impressions=(5 + idx) * 25,
-                        spend=sp_val,
-                        sales=s_val,
-                        orders=ord_cnt,
-                    ))
+                    sp_val = round(s_val * 0.18, 2)
+                    st_rows.append(
+                        SearchTerm(
+                            date=today - timedelta(days=1 + idx * 4),
+                            search_term=term,
+                            campaign_id=c.id,
+                            ad_group_id=ag.id,
+                            keyword_id=kw.id,
+                            clicks=max(ord_cnt, 5 + idx),
+                            impressions=(5 + idx) * 25,
+                            spend=sp_val,
+                            sales=s_val,
+                            orders=ord_cnt,
+                        )
+                    )
 
                 regular_terms = [
                     "travel pack portable lightweight",
                     "black color size standard",
                 ]
                 for idx, term in enumerate(regular_terms):
-                    st_rows.append(SearchTerm(
-                        date=today - timedelta(days=5 + idx * 5),
-                        search_term=term,
-                        campaign_id=c.id,
-                        ad_group_id=ag.id,
-                        keyword_id=kw.id,
-                        clicks=4,
-                        impressions=80,
-                        spend=8.0,
-                        sales=round(p_price, 2),
-                        orders=1,
-                    ))
+                    st_rows.append(
+                        SearchTerm(
+                            date=today - timedelta(days=5 + idx * 5),
+                            search_term=term,
+                            campaign_id=c.id,
+                            ad_group_id=ag.id,
+                            keyword_id=kw.id,
+                            clicks=4,
+                            impressions=80,
+                            spend=8.0,
+                            sales=round(p_price, 2),
+                            orders=1,
+                        )
+                    )
                 break
 
             if st_rows:
                 self.db.add_all(st_rows)
                 await self.db.commit()
 
-    def search_brands(self, q: str = "") -> list[str]:
-        fictional_brands = [
-            "ApexStyle", "AuraCraft", "BoldWave", "BreezeLiving", "BrightNova",
-            "CoreFusion", "CozyNest", "CrestPeak", "EchoPulse", "Elementix",
-            "EverGlow", "FlowState", "FrontierGoods", "FusionWear", "GlideGear",
-            "HavenPure", "HorizonPro", "IgniteWorks", "InfinityCraft", "IronClad",
-            "LuminaLife", "LunaBloom", "ModernHaven", "MotionTech", "NexusPrime",
-            "NovaForge", "OasisHome", "OmniFit", "PeakForm", "PolarisSupply",
-            "PrismWorks", "PulseActive", "QuantumLiving", "RadiantRoots", "SolaceGear",
-            "SummitLine", "TerraVibe", "TrueNorth", "UrbanCraft", "ZenithSupply"
-        ]
-        q_clean = q.strip().lower()
-        if not q_clean:
-            return fictional_brands
-        return [b for b in fictional_brands if q_clean in b.lower()]
 
-    @staticmethod
-    def suggest_bid(text: str, default_bid: float, rules: dict) -> dict:
-        import hashlib
-        h = int(hashlib.md5(text.encode()).hexdigest()[:8], 16) % 100 / 100
-        median = min(max(default_bid * (0.6 + 0.9 * h), rules["min_bid"]), rules["max_bid"])
-        return {
-            "low": round(max(rules["min_bid"], median * 0.7), 2),
-            "median": round(median, 2),
-            "high": round(min(rules["max_bid"], median * 1.4), 2)
-        }
+# Backward-compatible alias for test suites transitioning away from MockAdsProvider
+MockAdsProvider = TestAdsDataSeeder
 
 
-async def backfill_placement_metrics(db: AsyncSession, ads_account_id: int | None = None) -> int:
-    """Backfills placement_metrics_daily from existing campaign MetricDaily rows."""
+async def seed_test_account_data(db: AsyncSession, ads_account_id: int):
+    """Seed test campaigns, products, ad groups, keywords, and daily metrics."""
+    seeder = TestAdsDataSeeder(db)
+    await seeder.generate_for_new_connection(ads_account_id)
+
+
+async def backfill_test_placement_metrics(db: AsyncSession, ads_account_id: int | None = None) -> int:
+    """Backfills placement_metrics_daily from existing campaign MetricDaily rows in test db."""
     camp_query = select(Campaign.id)
     if ads_account_id is not None:
         camp_query = camp_query.where(Campaign.ads_account_id == ads_account_id)
@@ -737,16 +803,16 @@ async def backfill_placement_metrics(db: AsyncSession, ads_account_id: int | Non
         (row[0], row[1])
         for row in (
             await db.execute(
-                select(PlacementMetricDaily.campaign_id, PlacementMetricDaily.date)
-                .where(PlacementMetricDaily.campaign_id.in_(camp_ids))
+                select(PlacementMetricDaily.campaign_id, PlacementMetricDaily.date).where(
+                    PlacementMetricDaily.campaign_id.in_(camp_ids)
+                )
             )
         ).all()
     )
 
     m_rows = (
         await db.execute(
-            select(MetricDaily)
-            .where(
+            select(MetricDaily).where(
                 MetricDaily.entity_type == "campaign",
                 MetricDaily.entity_id.in_(camp_ids),
             )
@@ -780,14 +846,10 @@ async def backfill_placement_metrics(db: AsyncSession, ads_account_id: int | Non
     if new_p_rows:
         chunk_size = 5000
         for i in range(0, len(new_p_rows), chunk_size):
-            await db.execute(insert(PlacementMetricDaily), new_p_rows[i:i+chunk_size])
+            await db.execute(insert(PlacementMetricDaily), new_p_rows[i : i + chunk_size])
         await db.commit()
 
     return len(new_p_rows)
 
 
-async def backfill_mock_search_terms_and_metrics(db: AsyncSession, ads_account_id: int):
-    """One-off helper to backfill search terms, placements, and metrics for already-connected mock accounts."""
-    provider = MockAdsProvider(db)
-    await provider.sync_account_data(ads_account_id)
-    await backfill_placement_metrics(db, ads_account_id)
+backfill_placement_metrics = backfill_test_placement_metrics

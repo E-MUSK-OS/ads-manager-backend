@@ -176,13 +176,6 @@ class AmazonAdsProvider(AdsProvider):
             return last_response
         raise HTTPException(status_code=502, detail="Failed to communicate with Amazon Ads API")
 
-    async def generate_for_new_connection(self, ads_account_id: int):
-        # TODO(verify against official Amazon Ads API docs: initial sync and profile hydration)
-        raise NotImplementedError(
-            "Amazon Ads API generate_for_new_connection is not implemented yet. "
-            "Profile data is populated during the LWA OAuth callback. Full sync is deferred."
-        )
-
     async def sync_account_data(self, ads_account_id: int):
         # TODO(verify against official Amazon Ads API docs: sync /sp/campaigns and /reporting/reports)
         raise NotImplementedError(

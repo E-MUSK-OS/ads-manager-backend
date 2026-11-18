@@ -39,7 +39,6 @@ from app.services.metrics_service import (
 )
 from app.core.marketplace_rules import MARKETPLACE_RULES, today_for, marketplace_or_in, compute_max_effective_bid
 from app.core.exceptions import ServiceValidationError
-from app.providers.ads.mock_provider import MockAdsProvider
 from app.providers.ads.factory import get_ads_provider
 
 router = APIRouter(prefix="/campaigns", tags=["campaigns"])
@@ -639,24 +638,23 @@ async def bid_suggestions(
 ):
     account = await assert_owned_account(db, payload.ads_account_id, current_user)
     rules = marketplace_or_in(account.marketplace)
-    default_bid = rules["recommended_budget"] * 0.05
 
+    # Real numbers only: missing upstream recommendations return None (never invented numbers)
     items = []
     for kw in payload.keywords:
-        sug = MockAdsProvider.suggest_bid(kw.keyword_text, default_bid, rules)
         items.append({
             "keyword_text": kw.keyword_text,
             "match_type": kw.match_type,
-            "low": sug["low"],
-            "median": sug["median"],
-            "high": sug["high"]
+            "low": None,
+            "median": None,
+            "high": None
         })
 
     auto_groups = {
-        "CLOSE_MATCH": MockAdsProvider.suggest_bid("close_match", default_bid, rules),
-        "LOOSE_MATCH": MockAdsProvider.suggest_bid("loose_match", default_bid * 0.8, rules),
-        "SUBSTITUTES": MockAdsProvider.suggest_bid("substitutes", default_bid * 0.9, rules),
-        "COMPLEMENTS": MockAdsProvider.suggest_bid("complements", default_bid * 0.7, rules),
+        "CLOSE_MATCH": {"low": None, "median": None, "high": None},
+        "LOOSE_MATCH": {"low": None, "median": None, "high": None},
+        "SUBSTITUTES": {"low": None, "median": None, "high": None},
+        "COMPLEMENTS": {"low": None, "median": None, "high": None},
     }
 
     return {
@@ -1786,7 +1784,6 @@ async def get_campaign_targets(
                 )
             )).first()
             derived = derive(int(m_row[0]), int(m_row[1]), float(m_row[2]), float(m_row[3]), int(m_row[4]))
-            sug = MockAdsProvider.suggest_bid(tg.expression_type or tg.value or "auto_group", tg.bid or def_bid, rules)
             items.append({
                 "id": tg.id,
                 "campaign_id": c.id,
@@ -1796,9 +1793,9 @@ async def get_campaign_targets(
                 "expression_value": tg.expression_value or tg.value,
                 "state": tg.state,
                 "bid": tg.bid,
-                "suggested_bid_low": sug["low"],
-                "suggested_bid_median": sug["median"],
-                "suggested_bid_high": sug["high"],
+                "suggested_bid_low": None,
+                "suggested_bid_median": None,
+                "suggested_bid_high": None,
                 **derived
             })
 
@@ -1822,7 +1819,6 @@ async def get_campaign_targets(
                     )
                 )).first()
                 derived = derive(int(m_row[0]), int(m_row[1]), float(m_row[2]), float(m_row[3]), int(m_row[4]))
-                sug = MockAdsProvider.suggest_bid(kw.keyword_text, kw.bid or 15.0, rules)
                 items.append({
                     "id": kw.id,
                     "campaign_id": c.id,
@@ -1832,9 +1828,9 @@ async def get_campaign_targets(
                     "match_type": kw.match_type,
                     "state": kw.state,
                     "bid": kw.bid,
-                    "suggested_bid_low": sug["low"],
-                    "suggested_bid_median": sug["median"],
-                    "suggested_bid_high": sug["high"],
+                    "suggested_bid_low": None,
+                    "suggested_bid_median": None,
+                    "suggested_bid_high": None,
                     **derived
                 })
 
@@ -1861,7 +1857,6 @@ async def get_campaign_targets(
                 )
             )).first()
             derived = derive(int(m_row[0]), int(m_row[1]), float(m_row[2]), float(m_row[3]), int(m_row[4]))
-            sug = MockAdsProvider.suggest_bid(tg.expression_value or tg.value or "target", tg.bid or 15.0, rules)
             items.append({
                 "id": tg.id,
                 "campaign_id": c.id,
@@ -1871,9 +1866,9 @@ async def get_campaign_targets(
                 "expression_value": tg.expression_value or tg.value,
                 "state": tg.state,
                 "bid": tg.bid,
-                "suggested_bid_low": sug["low"],
-                "suggested_bid_median": sug["median"],
-                "suggested_bid_high": sug["high"],
+                "suggested_bid_low": None,
+                "suggested_bid_median": None,
+                "suggested_bid_high": None,
                 **derived
             })
 

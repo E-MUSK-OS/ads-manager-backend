@@ -11,7 +11,6 @@ from app.core import crypto
 from app.models.ads_account import AdsAccount
 from app.models.user import User
 from app.providers.ads.factory import get_ads_provider
-from app.providers.ads.mock_provider import MockAdsProvider
 from app.providers.ads.amazon_provider import AmazonAdsProvider
 
 
@@ -52,19 +51,21 @@ def test_token_encryption_missing_key(monkeypatch):
 # ---------------------------------------------------------------------------
 
 def test_fast_fail_when_amazon_provider_missing_credentials():
-    # ADS_PROVIDER=amazon without required credentials must raise ValueError
+    # Production without required credentials must raise ValueError
     with pytest.raises(ValueError, match="Fast-fail startup error"):
         Settings(
+            ENVIRONMENT="production",
             ADS_PROVIDER="amazon",
             DATABASE_URL="sqlite+aiosqlite:///:memory:",
             JWT_SECRET_KEY="test_secret_key_at_least_32_chars_long",
+            FRONTEND_URL="https://app.example.com",
             AMAZON_LWA_CLIENT_ID=None,
         )
 
     # Insecure JWT_SECRET_KEY fails startup
     with pytest.raises(ValueError, match="JWT_SECRET_KEY"):
         Settings(
-            ADS_PROVIDER="mock",
+            ADS_PROVIDER="amazon",
             DATABASE_URL="sqlite+aiosqlite:///:memory:",
             JWT_SECRET_KEY="changeme",
         )
@@ -75,24 +76,14 @@ def test_fast_fail_when_amazon_provider_missing_credentials():
 # ---------------------------------------------------------------------------
 
 def test_provider_factory_choice(db_session, account_a):
-    # Mock account returns MockAdsProvider
+    # Only AmazonAdsProvider is supported
     account_a.is_mock = True
     provider = get_ads_provider(db_session, account_a)
-    assert isinstance(provider, MockAdsProvider)
+    assert isinstance(provider, AmazonAdsProvider)
 
-    # When ADS_PROVIDER='mock', even real accounts return MockAdsProvider
     account_a.is_mock = False
     provider = get_ads_provider(db_session, account_a)
-    assert isinstance(provider, MockAdsProvider)
-
-    # When ADS_PROVIDER='amazon' and account.is_mock is False, returns AmazonAdsProvider
-    orig_provider = settings.ADS_PROVIDER
-    try:
-        settings.ADS_PROVIDER = "amazon"
-        provider = get_ads_provider(db_session, account_a)
-        assert isinstance(provider, AmazonAdsProvider)
-    finally:
-        settings.ADS_PROVIDER = orig_provider
+    assert isinstance(provider, AmazonAdsProvider)
 
 
 # ---------------------------------------------------------------------------
@@ -480,14 +471,9 @@ async def test_amazon_callback_profile_already_linked_to_another_user(client_b, 
 
 @pytest.mark.asyncio
 async def test_connect_amazon_rejects_non_mock_provider(client_a):
-    orig = settings.ADS_PROVIDER
-    try:
-        settings.ADS_PROVIDER = "amazon"
-        resp = await client_a.post("/ads-accounts/connect", json={"marketplace": "US"})
-        assert resp.status_code == 400
-        assert "Live mode: connect through Login with Amazon" in resp.json()["detail"]
-    finally:
-        settings.ADS_PROVIDER = orig
+    # Old mock connect endpoint has been removed
+    resp = await client_a.post("/ads-accounts/connect", json={"marketplace": "US"})
+    assert resp.status_code in (404, 405)
 
 
 # ---------------------------------------------------------------------------
@@ -496,11 +482,10 @@ async def test_connect_amazon_rejects_non_mock_provider(client_a):
 
 @pytest.mark.asyncio
 async def test_sync_account_converts_not_implemented_to_501(client_a, db_session, account_a, monkeypatch):
-    from app.providers.ads.mock_provider import MockAdsProvider
     async def mock_sync(self, account_id):
         raise NotImplementedError("Live Amazon sync is not implemented yet.")
 
-    monkeypatch.setattr(MockAdsProvider, "sync_account_data", mock_sync)
+    monkeypatch.setattr(AmazonAdsProvider, "sync_account_data", mock_sync)
     resp = await client_a.post(f"/ads-accounts/{account_a.id}/sync")
     assert resp.status_code == 501
     assert "Live Amazon sync is not implemented yet." in resp.json()["detail"]

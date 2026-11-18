@@ -176,8 +176,7 @@ async def test_live_mode_connect_returns_400_and_creates_no_row(client_a, db_ses
     count_before = len(res_before.scalars().all())
 
     resp = await client_a.post("/ads-accounts/connect", json={"marketplace": "US"})
-    assert resp.status_code == 400
-    assert "Live mode: connect through Login with Amazon" in resp.json()["detail"]
+    assert resp.status_code in (404, 405)
 
     res_after = await db_session.execute(select(AdsAccount))
     count_after = len(res_after.scalars().all())
@@ -210,24 +209,16 @@ async def test_live_mode_sync_returns_501(client_a, user_a, db_session, monkeypa
 
 
 # ---------------------------------------------------------------------------
-# 5. Mock-Mode Regression: Connect and Sync Return 200
+# 5. Provider Mode Endpoint (Mock Mode Removed)
 # ---------------------------------------------------------------------------
 
 @pytest.mark.asyncio
-async def test_mock_mode_regression_connect_and_sync(client_a, user_a, db_session, monkeypatch):
-    monkeypatch.setattr(settings, "ADS_PROVIDER", "mock")
-
-    # Connect returns 200
-    connect_resp = await client_a.post("/ads-accounts/connect", json={"marketplace": "IN"})
-    assert connect_resp.status_code == 200
-    account_data = connect_resp.json()
-    account_id = account_data["id"]
-    assert account_data["is_mock"] is True
-
-    # Sync returns 200
-    sync_resp = await client_a.post(f"/ads-accounts/{account_id}/sync")
-    assert sync_resp.status_code == 200
-    assert sync_resp.json()["status"] == "ok"
+async def test_mock_mode_regression_connect_and_sync(client_a):
+    resp = await client_a.get("/ads-accounts/provider-mode")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["provider"] == "amazon"
+    assert data["region"] == "eu"
 
 
 # ---------------------------------------------------------------------------
@@ -380,18 +371,16 @@ async def test_callback_profile_without_country_code_skipped(client_a, user_a, m
 
 @pytest.mark.asyncio
 async def test_default_mock_connect_creates_marketplace_in(client_a):
-    # (4) default mock connect creates marketplace IN
     resp = await client_a.post("/ads-accounts/connect", json={})
-    assert resp.status_code == 200
-    account_data = resp.json()
-    assert account_data["marketplace"] == "IN"
+    assert resp.status_code in (404, 405)
 
 
 def test_config_rejects_short_jwt_secret_when_amazon_provider():
     from app.config import Settings
-    # (5) config rejects a short JWT_SECRET_KEY when ADS_PROVIDER="amazon"
+    # (5) config rejects a short JWT_SECRET_KEY in production mode
     with pytest.raises(ValueError, match="at least 32 characters"):
         Settings(
+            ENVIRONMENT="production",
             ADS_PROVIDER="amazon",
             DATABASE_URL="sqlite+aiosqlite:///:memory:",
             JWT_SECRET_KEY="too_short_secret",

@@ -16,7 +16,7 @@ from app.models.recommendation_rule import RecommendationRule, RecommendationRul
 from app.models.recommendation_run import RecommendationRun
 from app.models.search_term import SearchTerm
 from app.models.user import User
-from app.providers.ads.mock_provider import MockAdsProvider
+from tests.factories import TestAdsDataSeeder as MockAdsProvider
 from app.recommendations.engine import RuleBasedEngine, get_engine, run_engine
 from app.recommendations.registry import TEMPLATES, resolve_template, resolve_value
 

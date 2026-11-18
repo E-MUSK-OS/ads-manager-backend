@@ -10,36 +10,6 @@ from app.core import marketplace_rules
 from app.models.user import User
 from app.models.ads_account import AdsAccount
 from app.models.contact_message import ContactMessage
-from app.providers.llm.claude_provider import ClaudeProvider
-
-
-# ---------------------------------------------------------------------------
-# FIX 1d: AI Chat Request Body Tests
-# ---------------------------------------------------------------------------
-
-@pytest.mark.asyncio
-async def test_ai_chat_json_body_and_validations(client_a: AsyncClient, monkeypatch):
-    # Mock ClaudeProvider.chat so Anthropic API is never called
-    mock_chat = AsyncMock(return_value="AI recommendation response")
-    monkeypatch.setattr(ClaudeProvider, "chat", mock_chat)
-
-    # 1. Valid JSON body returns 200
-    resp = await client_a.post("/ai/chat", json={"message": "hi"})
-    assert resp.status_code == 200
-    assert resp.json() == {"response": "AI recommendation response"}
-    assert mock_chat.await_count == 1
-
-    # 2. Old query-param style with no body returns 422
-    old_resp = await client_a.post("/ai/chat?message=hi")
-    assert old_resp.status_code == 422
-
-    # 3. Empty message in JSON body returns 422
-    empty_resp = await client_a.post("/ai/chat", json={"message": ""})
-    assert empty_resp.status_code == 422
-
-    # 4. Whitespace-only message in JSON body returns 422
-    blank_resp = await client_a.post("/ai/chat", json={"message": "   "})
-    assert blank_resp.status_code == 422
 
 
 # ---------------------------------------------------------------------------
@@ -155,10 +125,14 @@ def test_config_production_and_strict_validation():
     with pytest.raises(ValueError) as exc1:
         Settings(
             ENVIRONMENT="production",
-            ADS_PROVIDER="mock",
+            ADS_PROVIDER="amazon",
             DATABASE_URL="sqlite+aiosqlite://",
             JWT_SECRET_KEY="short_key",
             FRONTEND_URL="https://app.example.com",
+            AMAZON_LWA_CLIENT_ID="mock_id",
+            AMAZON_LWA_CLIENT_SECRET="mock_secret",
+            AMAZON_LWA_REDIRECT_URI="https://app.example.com/callback",
+            TOKEN_ENCRYPTION_KEY="mock_token_key",
         )
     assert "JWT_SECRET_KEY" in str(exc1.value)
 
@@ -166,27 +140,35 @@ def test_config_production_and_strict_validation():
     with pytest.raises(ValueError) as exc2:
         Settings(
             ENVIRONMENT="production",
-            ADS_PROVIDER="mock",
+            ADS_PROVIDER="amazon",
             DATABASE_URL="sqlite+aiosqlite://",
             JWT_SECRET_KEY="a" * 32,
             FRONTEND_URL="http://app.example.com",
+            AMAZON_LWA_CLIENT_ID="mock_id",
+            AMAZON_LWA_CLIENT_SECRET="mock_secret",
+            AMAZON_LWA_REDIRECT_URI="https://app.example.com/callback",
+            TOKEN_ENCRYPTION_KEY="mock_token_key",
         )
     assert "FRONTEND_URL" in str(exc2.value)
 
     # 3. Production + valid values passes
     prod_settings = Settings(
         ENVIRONMENT="production",
-        ADS_PROVIDER="mock",
+        ADS_PROVIDER="amazon",
         DATABASE_URL="sqlite+aiosqlite://",
         JWT_SECRET_KEY="a" * 32,
         FRONTEND_URL="https://app.example.com, https://admin.example.com",
+        AMAZON_LWA_CLIENT_ID="mock_id",
+        AMAZON_LWA_CLIENT_SECRET="mock_secret",
+        AMAZON_LWA_REDIRECT_URI="https://app.example.com/callback",
+        TOKEN_ENCRYPTION_KEY="mock_token_key",
     )
     assert prod_settings.ENVIRONMENT == "production"
 
-    # 4. Development + mock + short secret still passes (for local work and dev tests)
+    # 4. Development + short secret still passes (for local work and dev tests)
     dev_settings = Settings(
         ENVIRONMENT="development",
-        ADS_PROVIDER="mock",
+        ADS_PROVIDER="amazon",
         DATABASE_URL="sqlite+aiosqlite://",
         JWT_SECRET_KEY="dev_short_secret",
         FRONTEND_URL="http://localhost:3000",

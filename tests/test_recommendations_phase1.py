@@ -10,7 +10,7 @@ from app.models.keyword import Keyword
 from app.models.search_term import SearchTerm
 from app.models.metric_daily import MetricDaily
 from app.models.user import User
-from app.providers.ads.mock_provider import MockAdsProvider
+from tests.factories import TestAdsDataSeeder as MockAdsProvider
 from app.recommendations.registry import (
     DATE_FILTERS,
     METRICS,

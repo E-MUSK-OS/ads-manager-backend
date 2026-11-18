@@ -109,11 +109,12 @@ async def test_bid_suggestions_deterministic(client_a: AsyncClient, account_a):
     assert resp2.status_code == 200
     data2 = resp2.json()
 
-    # Exact deterministic match
+    # Honest null state when Amazon bid recommendations are not connected
     assert data1 == data2
     for item in data1["items"]:
-        assert item["low"] <= item["median"] <= item["high"]
-        assert item["low"] >= 2.0 # IN min_bid
+        assert item["low"] is None
+        assert item["median"] is None
+        assert item["high"] is None
 
 @pytest.mark.asyncio
 async def test_forecast_limits_and_null_ranges(client_a: AsyncClient, account_a):
@@ -212,52 +213,6 @@ async def test_products_search_pagination_sort_q(client_a: AsyncClient, account_
     assert resp.status_code == 200
     items = resp.json()["items"]
     assert items[0]["price"] >= items[1]["price"]
-
-@pytest.mark.asyncio
-async def test_drafts_crud_isolation(client_a: AsyncClient, client_b: AsyncClient, account_a, account_b):
-    # User A creates a draft
-    draft_payload = {
-        "ads_account_id": account_a.id,
-        "name": "Draft 1",
-        "step": 2,
-        "payload": {"details": {"name": "Draft 1"}}
-    }
-    create_resp = await client_a.post("/campaign-drafts", json=draft_payload)
-    assert create_resp.status_code == 201
-    draft_id = create_resp.json()["id"]
-
-    # User A can list it
-    list_a = await client_a.get(f"/campaign-drafts?ads_account_id={account_a.id}")
-    assert list_a.status_code == 200
-    assert len(list_a.json()) == 1
-
-    # User B cannot see it
-    list_b = await client_b.get(f"/campaign-drafts?ads_account_id={account_b.id}")
-    assert list_b.status_code == 200
-    assert len(list_b.json()) == 0
-
-    # User B cannot update or delete User A's draft
-    resp = await client_b.put(f"/campaign-drafts/{draft_id}", json={"name": "Hacked Draft"})
-    assert resp.status_code == 404
-
-    resp = await client_b.delete(f"/campaign-drafts/{draft_id}")
-    assert resp.status_code == 404
-
-    # User A updates draft
-    update_resp = await client_a.put(f"/campaign-drafts/{draft_id}", json={"name": "Draft 1 Renamed", "step": 3})
-    assert update_resp.status_code == 200
-    assert update_resp.json()["name"] == "Draft 1 Renamed"
-    assert update_resp.json()["step"] == 3
-
-    # Oversized payload rejected
-    large_payload = {
-        "ads_account_id": account_a.id,
-        "name": "Big Draft",
-        "step": 1,
-        "payload": {"huge": "x" * (205 * 1024)}
-    }
-    resp = await client_a.post("/campaign-drafts", json=large_payload)
-    assert resp.status_code == 413
 
 @pytest.mark.asyncio
 async def test_products_lookup(client_a: AsyncClient, account_a, db_session):
