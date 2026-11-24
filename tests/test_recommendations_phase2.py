@@ -16,11 +16,11 @@ async def test_meta_endpoint(client_a: AsyncClient, client_b: AsyncClient, accou
     data_in = resp_in.json()
     assert data_in["currency"]["symbol"] == "₹"
     assert data_in["currency"]["code"] == "INR"
-    assert data_in["affected_parameters"]["PLACEMENT"]["available"] is True
+    assert "PLACEMENT" not in data_in["affected_parameters"]  # PLACEMENT hidden by default (F8, Q1)
 
     t_in = next(t for t in data_in["templates"] if t["key"] == "negate_wasted_terms")
     spend_cond_in = next(c for c in t_in["conditions"] if c["metric"] == "spend")
-    assert spend_cond_in["value"] == 20
+    assert spend_cond_in["value"] is None  # Thresholds left empty for user to type (F6, Q2)
 
     # Meta for US
     resp_us = await client_b.get(f"/recommendations/meta?ads_account_id={account_b.id}")
@@ -31,7 +31,7 @@ async def test_meta_endpoint(client_a: AsyncClient, client_b: AsyncClient, accou
 
     t_us = next(t for t in data_us["templates"] if t["key"] == "negate_wasted_terms")
     spend_cond_us = next(c for c in t_us["conditions"] if c["metric"] == "spend")
-    assert spend_cond_us["value"] == 10
+    assert spend_cond_us["value"] is None
 
     # Foreign account access returns 404
     resp_foreign = await client_a.get(f"/recommendations/meta?ads_account_id={account_b.id}")
@@ -249,7 +249,7 @@ async def test_foreign_account_and_rule_404s(client_a: AsyncClient, client_b: As
 
 
 @pytest.mark.asyncio
-async def test_duplicate_bulk_export_import_roundtrip(client_a: AsyncClient, client_b: AsyncClient, account_a, account_b):
+async def test_duplicate_and_bulk_rules(client_a: AsyncClient, client_b: AsyncClient, account_a, account_b):
     # Create a rule in account_a
     payload = {
         "ads_account_id": account_a.id,
@@ -288,43 +288,6 @@ async def test_duplicate_bulk_export_import_roundtrip(client_a: AsyncClient, cli
     # Check rule_id is now disabled
     rule_check = await client_a.get(f"/recommendations/rules/{rule_id}")
     assert rule_check.json()["is_active"] is False
-
-    # 3. Export
-    exp_resp = await client_a.post("/recommendations/rules/export", json={"ids": [rule_id]})
-    assert exp_resp.status_code == 200
-    exp_data = exp_resp.json()
-    assert exp_data["version"] == 1
-    assert len(exp_data["rules"]) == 1
-    assert exp_data["rules"][0]["name"] == "Harvest Convert"
-    assert "id" not in exp_data["rules"][0]
-    assert "campaign_ids" not in exp_data["rules"][0]
-
-    # 4. Import back to account_a (Name clash -> skipped)
-    imp_resp = await client_a.post(
-        "/recommendations/rules/import",
-        json={"ads_account_id": account_a.id, "rules": exp_data["rules"]},
-    )
-    assert imp_resp.status_code == 200
-    imp_results = imp_resp.json()["results"]
-    assert len(imp_results) == 1
-    assert imp_results[0]["status"] == "skipped"
-    assert "already exists" in imp_results[0]["reason"]
-
-    # 5. Import to account_b (Should succeed as created, is_active=false, scope=ALL)
-    imp_resp_b = await client_b.post(
-        "/recommendations/rules/import",
-        json={"ads_account_id": account_b.id, "rules": exp_data["rules"]},
-    )
-    assert imp_resp_b.status_code == 200
-    imp_results_b = imp_resp_b.json()["results"]
-    assert len(imp_results_b) == 1
-    assert imp_results_b[0]["status"] == "created"
-    new_b_rule_id = imp_results_b[0]["rule_id"]
-
-    new_rule_b = await client_b.get(f"/recommendations/rules/{new_b_rule_id}")
-    assert new_rule_b.status_code == 200
-    assert new_rule_b.json()["is_active"] is False
-    assert new_rule_b.json()["scope_mode"] == "ALL"
 
 
 @pytest.mark.asyncio

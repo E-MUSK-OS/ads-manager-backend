@@ -99,12 +99,12 @@ def test_resolve_value():
     assert resolve_value(0.0, "IN") == 0.0
 
     # Template resolution
-    t = TEMPLATES[0]
-    resolved_in = resolve_template(t, "IN")
+    mock_t = {"conditions": [{"metric": "spend", "value": {"default": 10, "IN": 20}}]}
+    resolved_in = resolve_template(mock_t, "IN")
     spend_cond_in = next(c for c in resolved_in["conditions"] if c["metric"] == "spend")
     assert spend_cond_in["value"] == 20
 
-    resolved_us = resolve_template(t, "US")
+    resolved_us = resolve_template(mock_t, "US")
     spend_cond_us = next(c for c in resolved_us["conditions"] if c["metric"] == "spend")
     assert spend_cond_us["value"] == 10
 

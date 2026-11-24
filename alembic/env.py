@@ -45,6 +45,7 @@ from app.models.saved_filter import SavedFilter
 from app.models.campaign_bid_threshold import CampaignBidThreshold
 from app.models.campaign_hourly_metric import CampaignHourlyMetric
 from app.models.hourly_stream_status import HourlyStreamStatus
+from app.models.campaign_status_daily import CampaignStatusDaily
 from app.config import settings
 
 target_metadata = Base.metadata

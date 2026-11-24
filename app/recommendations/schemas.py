@@ -38,7 +38,7 @@ class RuleIn(BaseModel):
     date_filter: str = "LAST_30_DAYS"
     min_clicks: int = Field(0, ge=0, le=100000)
     conditions: list[ConditionIn] = Field(min_length=1, max_length=6)
-    actions: list[ActionIn] = Field(min_length=1, max_length=4)
+    actions: list[ActionIn] = Field(default_factory=list, min_length=0, max_length=4)
     is_active: bool = True
     scope_mode: Literal["ALL", "INCLUDE", "EXCLUDE"] = "ALL"
     campaign_ids: list[int] = Field(default_factory=list)
@@ -65,6 +65,7 @@ class RuleResponse(BaseModel):
     last_match_count: int = 0
     open_count: int = 0
     scope_label: str
+    last_funnel: Optional[dict[str, Any]] = None
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -86,15 +87,6 @@ class ScopeUpdate(BaseModel):
 class BulkRulesRequest(BaseModel):
     ids: list[int]
     action: Literal["ENABLE", "DISABLE", "DELETE"]
-
-
-class ExportRulesRequest(BaseModel):
-    ids: list[int]
-
-
-class ImportRulesRequest(BaseModel):
-    ads_account_id: int
-    rules: list[dict[str, Any]]
 
 
 class PreviewRequest(BaseModel):
@@ -131,8 +123,42 @@ async def validate_rule_in(
                 "message": f"Unknown operator '{cond.op}'",
             })
 
-        # 2. value numeric >= 0 (percent/ratio metrics <= 1000; no duplicate metric+op pair)
-        if cond.value < 0:
+        # 2. value numeric validation
+        if cond.metric == "acos_vs_target":
+            if cond.value < -100 or cond.value > 100:
+                errors.append({
+                    "field": f"conditions.{idx}.value",
+                    "message": "Offset must be between -100 and 100 percentage points",
+                })
+        elif cond.metric.endswith("_change_pct"):
+            if cond.value < -100 or cond.value > 1000:
+                errors.append({
+                    "field": f"conditions.{idx}.value",
+                    "message": "Percentage change must be between -100% and 1000%",
+                })
+        elif cond.metric in ("target_spend_share", "target_sales_share"):
+            if rule.affected_parameter not in ("TARGETING", "SEARCH_TERM"):
+                errors.append({
+                    "field": f"conditions.{idx}.metric",
+                    "message": f"{cond.metric} condition is only allowed for TARGETING and SEARCH_TERM rules",
+                })
+            if cond.value < 0 or cond.value > 100:
+                errors.append({
+                    "field": f"conditions.{idx}.value",
+                    "message": "Share percentage must be between 0 and 100%",
+                })
+        elif cond.metric == "out_of_budget_days":
+            if rule.affected_parameter != "CAMPAIGN":
+                errors.append({
+                    "field": f"conditions.{idx}.metric",
+                    "message": "out_of_budget_days condition is only allowed for CAMPAIGN rules",
+                })
+            if cond.value < 1 or cond.value > 14:
+                errors.append({
+                    "field": f"conditions.{idx}.value",
+                    "message": "Out of budget days must be between 1 and 14",
+                })
+        elif cond.value < 0:
             errors.append({
                 "field": f"conditions.{idx}.value",
                 "message": "Value must be greater than or equal to 0",
@@ -154,7 +180,33 @@ async def validate_rule_in(
         else:
             seen_cond_pairs.add(pair)
 
-    # 3. action allowed for the affected parameter
+    # 3. One-action validator for TARGETING and CAMPAIGN, and Out-of-Budget display-only validator
+    has_oob_cond = any(c.metric == "out_of_budget_days" for c in rule.conditions)
+    if has_oob_cond:
+        if rule.affected_parameter != "CAMPAIGN":
+            errors.append({
+                "field": "conditions",
+                "message": "out_of_budget_days condition is only allowed for CAMPAIGN rules",
+            })
+        if len(rule.actions) > 0:
+            errors.append({
+                "field": "actions",
+                "message": "Rules with Out of Budget condition are display-only and cannot have actions",
+            })
+    elif rule.affected_parameter in ("TARGETING", "CAMPAIGN"):
+        if len(rule.actions) != 1:
+            errors.append({
+                "field": "actions",
+                "message": f"Rules for {rule.affected_parameter} must define exactly one action",
+            })
+    elif rule.affected_parameter == "SEARCH_TERM":
+        if len(rule.actions) == 0:
+            errors.append({
+                "field": "actions",
+                "message": "At least one action is required for SEARCH_TERM rules",
+            })
+
+    # 4. Action allowed for the affected parameter and param validations
     param_actions = ACTIONS.get(rule.affected_parameter, {})
     for idx, action in enumerate(rule.actions):
         if action.type not in param_actions:
@@ -164,61 +216,153 @@ async def validate_rule_in(
             })
             continue
 
-        # 4. each param present/in range (use the registry; fill defaults)
-        action_def = param_actions[action.type]
-        params_schema = action_def.get("params", {})
-        for p_name, p_schema in params_schema.items():
-            val = action.params.get(p_name)
+        # Normalise legacy pct param
+        has_orig_pct = ("pct" in action.params and "value" not in action.params)
+        has_orig_percentage = ("percentage" in action.params and "value" not in action.params)
+        if has_orig_pct:
+            action.params["mode"] = "percent"
+            action.params["value"] = action.params["pct"]
+        elif has_orig_percentage:
+            action.params["mode"] = "percent"
+            action.params["value"] = action.params["percentage"]
+
+        val_key = "pct" if has_orig_pct else ("percentage" if has_orig_percentage else "value")
+
+        if action.type in ("INCREASE_BID", "DECREASE_BID", "INCREASE_BUDGET", "DECREASE_BUDGET"):
+            mode = action.params.get("mode", "percent")
+            action.params["mode"] = mode
+            if mode not in ("percent", "amount"):
+                errors.append({
+                    "field": f"actions.{idx}.params.mode",
+                    "message": "Unit must be 'percent' or 'amount'",
+                })
+            val = action.params.get("value")
             if val is None or val == "":
-                if "default" in p_schema:
-                    action.params[p_name] = p_schema["default"]
-                elif not p_schema.get("optional", False):
-                    errors.append({
-                        "field": f"actions.{idx}.params.{p_name}",
-                        "message": f"Parameter '{p_name}' is required",
-                    })
+                errors.append({
+                    "field": f"actions.{idx}.params.{val_key}",
+                    "message": "Value is required",
+                })
             else:
-                p_type = p_schema["type"]
-                if p_type == "enum":
-                    if val not in p_schema["options"]:
-                        errors.append({
-                            "field": f"actions.{idx}.params.{p_name}",
-                            "message": f"Value must be one of {p_schema['options']}",
-                        })
-                elif p_type in ("percent", "int"):
-                    try:
-                        val_num = int(val) if p_type == "int" else float(val)
-                        if val_num < p_schema["min"] or val_num > p_schema["max"]:
+                try:
+                    num_val = float(val)
+                    if mode == "percent":
+                        if "INCREASE" in action.type:
+                            if num_val < 1 or num_val > 500:
+                                errors.append({
+                                    "field": f"actions.{idx}.params.{val_key}",
+                                    "message": "Percentage increase must be between 1 and 500",
+                                })
+                        else:
+                            if num_val < 1 or num_val > 90:
+                                errors.append({
+                                    "field": f"actions.{idx}.params.{val_key}",
+                                    "message": "Percentage decrease must be between 1 and 90",
+                                })
+                    elif mode == "amount":
+                        if num_val <= 0:
                             errors.append({
-                                "field": f"actions.{idx}.params.{p_name}",
-                                "message": f"Value must be between {p_schema['min']} and {p_schema['max']}",
+                                "field": f"actions.{idx}.params.{val_key}",
+                                "message": "Amount must be greater than 0",
                             })
-                        action.params[p_name] = val_num
-                    except (ValueError, TypeError):
+                    action.params["value"] = num_val
+                except (ValueError, TypeError):
+                    errors.append({
+                        "field": f"actions.{idx}.params.{val_key}",
+                        "message": "Value must be a valid number",
+                    })
+
+        elif action.type == "SET_BUDGET":
+            action.params["mode"] = "amount"
+            val = action.params.get("value")
+            if val is None or val == "":
+                errors.append({
+                    "field": f"actions.{idx}.params.value",
+                    "message": "Daily budget is required",
+                })
+            else:
+                try:
+                    num_val = float(val)
+                    min_budget = float(marketplace_rules["min_budget"])
+                    if num_val < min_budget:
                         errors.append({
-                            "field": f"actions.{idx}.params.{p_name}",
-                            "message": "Must be a valid number",
+                            "field": f"actions.{idx}.params.value",
+                            "message": f"Daily budget must be at least ₹{min_budget:g}",
                         })
-                elif p_type == "money":
-                    try:
-                        val_num = float(val)
-                        max_bid = marketplace_rules["max_bid"]
-                        if val_num < 0:
-                            errors.append({
-                                "field": f"actions.{idx}.params.{p_name}",
-                                "message": "Bid must be greater than or equal to 0",
-                            })
-                        elif val_num > max_bid:
-                            errors.append({
-                                "field": f"actions.{idx}.params.{p_name}",
-                                "message": f"Bid must be less than or equal to {max_bid}",
-                            })
-                        action.params[p_name] = val_num
-                    except (ValueError, TypeError):
+                    action.params["value"] = num_val
+                except (ValueError, TypeError):
+                    errors.append({
+                        "field": f"actions.{idx}.params.value",
+                        "message": "Daily budget must be a valid number",
+                    })
+
+        elif action.type in ("ENABLE_CAMPAIGN", "PAUSE_CAMPAIGN", "PAUSE_TARGET"):
+            # No parameters required
+            pass
+
+        elif action.type == "ADD_AS_TARGETING":
+            m_type = action.params.get("match_type", "EXACT")
+            if m_type not in ("EXACT", "PHRASE", "BROAD"):
+                errors.append({
+                    "field": f"actions.{idx}.params.match_type",
+                    "message": "Match type must be EXACT, PHRASE, or BROAD",
+                })
+            action.params["match_type"] = m_type
+            bid_val = action.params.get("bid")
+            if bid_val is not None and bid_val != "":
+                try:
+                    num_bid = float(bid_val)
+                    max_bid = float(marketplace_rules["max_bid"])
+                    if num_bid < 0:
                         errors.append({
-                            "field": f"actions.{idx}.params.{p_name}",
-                            "message": "Must be a valid money value",
+                            "field": f"actions.{idx}.params.bid",
+                            "message": "Bid must be greater than or equal to 0",
                         })
+                    elif num_bid > max_bid:
+                        errors.append({
+                            "field": f"actions.{idx}.params.bid",
+                            "message": f"Bid must be less than or equal to {max_bid}",
+                        })
+                    action.params["bid"] = num_bid
+                except (ValueError, TypeError):
+                    errors.append({
+                        "field": f"actions.{idx}.params.bid",
+                        "message": "Must be a valid money value",
+                    })
+
+        elif action.type == "ADD_AS_NEGATIVE":
+            m_type = action.params.get("match_type", "NEGATIVE_EXACT")
+            if m_type not in ("NEGATIVE_EXACT", "NEGATIVE_PHRASE"):
+                errors.append({
+                    "field": f"actions.{idx}.params.match_type",
+                    "message": "Match type must be NEGATIVE_EXACT or NEGATIVE_PHRASE",
+                })
+            action.params["match_type"] = m_type
+            lvl = action.params.get("level", "AD_GROUP")
+            if lvl not in ("AD_GROUP", "CAMPAIGN"):
+                errors.append({
+                    "field": f"actions.{idx}.params.level",
+                    "message": "Level must be AD_GROUP or CAMPAIGN",
+                })
+            action.params["level"] = lvl
+
+        elif action.type in ("INCREASE_PLACEMENT", "DECREASE_PLACEMENT"):
+            pts = action.params.get("points")
+            if pts is None or pts == "":
+                action.params["points"] = 10
+            else:
+                try:
+                    pts_num = int(pts)
+                    if pts_num < 1 or pts_num > 900:
+                        errors.append({
+                            "field": f"actions.{idx}.params.points",
+                            "message": "Points must be between 1 and 900",
+                        })
+                    action.params["points"] = pts_num
+                except (ValueError, TypeError):
+                    errors.append({
+                        "field": f"actions.{idx}.params.points",
+                        "message": "Points must be an integer",
+                    })
 
     # 5. no two actions with the same type unless they differ in match_type
     seen_types: dict[str, Any] = {}

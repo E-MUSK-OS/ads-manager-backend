@@ -12,11 +12,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.core.crypto import decrypt, encrypt
-from app.core.marketplace_rules import MARKETPLACE_RULES, today_for
+from app.core.marketplace_rules import MARKETPLACE_RULES, today_for, round_money
 from app.models.ad_group import AdGroup
 from app.models.ads_account import AdsAccount
 from app.models.campaign import Campaign
 from app.models.campaign_history import CampaignHistory
+from app.models.campaign_status_daily import CampaignStatusDaily
 from app.models.metric_daily import MetricDaily
 from app.models.placement_metric_daily import PlacementMetricDaily
 from app.models.sync_run import SyncRun
@@ -457,6 +458,26 @@ class AmazonAdsProvider(AdsProvider):
         await self.db.commit()
         for c in upserted_campaigns:
             await self.db.refresh(c)
+
+        # Record daily campaign status snapshot (R3.4)
+        from sqlalchemy.dialects.postgresql import insert as pg_insert
+        today_ist = today_for(account.marketplace)
+        for c in upserted_campaigns:
+            status_stmt = pg_insert(CampaignStatusDaily).values(
+                ads_account_id=account.id,
+                campaign_id=c.id,
+                date=today_ist,
+                state=c.state,
+                serving_status=c.delivery_status or c.state,
+            ).on_conflict_do_update(
+                index_elements=["ads_account_id", "campaign_id", "date"],
+                set_={
+                    "state": c.state,
+                    "serving_status": c.delivery_status or c.state,
+                }
+            )
+            await self.db.execute(status_stmt)
+        await self.db.commit()
 
         return upserted_campaigns
 
@@ -1000,6 +1021,480 @@ class AmazonAdsProvider(AdsProvider):
         await self.db.refresh(campaign)
 
         return campaign
+
+    # -------------------------------------------------------------
+    # SP Recommendations Write & Live Check Methods (Phase R4)
+    # -------------------------------------------------------------
+
+    def _parse_batch_mutation_response(
+        self,
+        entity_key: str,
+        id_field: str,
+        items: list[dict[str, Any]],
+        resp: httpx.Response,
+    ) -> list[dict[str, Any]]:
+        """
+        Parses Amazon SP v3 207 Multi-Status or 200 response for batch mutations:
+        Expected structure: {entity_key: {"success": [...], "error": [...]}}
+        Returns aligned list: [{"success": bool, "error": Optional[str], ...}, ...]
+        """
+        if resp.status_code not in (200, 207):
+            err_text = resp.text
+            return [
+                {
+                    **it,
+                    "success": False,
+                    "error": f"Amazon API HTTP {resp.status_code}: {err_text}",
+                }
+                for it in items
+            ]
+
+        try:
+            body = resp.json()
+        except Exception:
+            return [
+                {
+                    **it,
+                    "success": False,
+                    "error": f"Invalid JSON response from Amazon (HTTP {resp.status_code})",
+                }
+                for it in items
+            ]
+
+        root = body.get(entity_key, {})
+        if not isinstance(root, dict):
+            if isinstance(body, list):
+                return [{**it, "success": True, "error": None} for it in items]
+            root = body
+
+        success_entries = root.get("success", [])
+        error_entries = root.get("error", [])
+
+        success_by_idx = {entry.get("index"): entry for entry in success_entries if "index" in entry}
+        error_by_idx = {entry.get("index"): entry for entry in error_entries if "index" in entry}
+
+        success_by_id = {str(entry.get(id_field)): entry for entry in success_entries if id_field in entry}
+        error_by_id = {str(entry.get(id_field)): entry for entry in error_entries if id_field in entry}
+
+        results = []
+        for idx, it in enumerate(items):
+            target_id = str(it.get(id_field) or it.get("keyword_id") or it.get("target_id") or it.get("campaign_id") or it.get("entity_id") or "")
+
+            if idx in success_by_idx:
+                results.append({**it, "success": True, "error": None, "response": success_by_idx[idx]})
+            elif idx in error_by_idx:
+                err = error_by_idx[idx]
+                err_msg = err.get("details") or err.get("code") or err.get("message") or str(err)
+                results.append({**it, "success": False, "error": err_msg, "response": err})
+            elif target_id and target_id in success_by_id:
+                results.append({**it, "success": True, "error": None, "response": success_by_id[target_id]})
+            elif target_id and target_id in error_by_id:
+                err = error_by_id[target_id]
+                err_msg = err.get("details") or err.get("code") or err.get("message") or str(err)
+                results.append({**it, "success": False, "error": err_msg, "response": err})
+            else:
+                if resp.status_code == 200 and not error_entries:
+                    results.append({**it, "success": True, "error": None})
+                else:
+                    results.append({**it, "success": False, "error": "Unknown status in Amazon Multi-Status response"})
+
+        return results
+
+    async def update_keyword_bids(
+        self,
+        account: AdsAccount,
+        items: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        """
+        Update Sponsored Products keyword bids via PUT /sp/keywords.
+        items: [{"keyword_id": str, "bid": float}, ...]
+        Returns: [{"keyword_id": str, "bid": float, "success": bool, "error": Optional[str]}, ...]
+        """
+        if not items:
+            return []
+
+        all_results = []
+        for i in range(0, len(items), 1000):
+            batch = items[i:i + 1000]
+            payload = {
+                "keywords": [
+                    {
+                        "keywordId": str(it["keyword_id"]),
+                        "bid": round_money(it["bid"]),
+                    }
+                    for it in batch
+                ]
+            }
+
+            resp = await self.request_api(
+                account=account,
+                method="PUT",
+                path="/sp/keywords",
+                json_data=payload,
+                content_type="application/vnd.spKeyword.v3+json",
+                accept="application/vnd.spKeyword.v3+json",
+            )
+            parsed = self._parse_batch_mutation_response("keywords", "keywordId", batch, resp)
+            all_results.extend(parsed)
+
+        return all_results
+
+    async def update_target_bids(
+        self,
+        account: AdsAccount,
+        items: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        """
+        Update Sponsored Products targeting clause bids via PUT /sp/targets.
+        items: [{"target_id": str, "bid": float}, ...]
+        """
+        if not items:
+            return []
+
+        all_results = []
+        for i in range(0, len(items), 1000):
+            batch = items[i:i + 1000]
+            payload = {
+                "targetingClauses": [
+                    {
+                        "targetId": str(it["target_id"]),
+                        "bid": round_money(it["bid"]),
+                    }
+                    for it in batch
+                ]
+            }
+
+            resp = await self.request_api(
+                account=account,
+                method="PUT",
+                path="/sp/targets",
+                json_data=payload,
+                content_type="application/vnd.spTargetingClause.v3+json",
+                accept="application/vnd.spTargetingClause.v3+json",
+            )
+            parsed = self._parse_batch_mutation_response("targetingClauses", "targetId", batch, resp)
+            all_results.extend(parsed)
+
+        return all_results
+
+    async def update_campaign_budgets(
+        self,
+        account: AdsAccount,
+        items: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        """
+        Update Sponsored Products campaign daily budgets via PUT /sp/campaigns.
+        items: [{"campaign_id": str, "daily_budget": float}, ...]
+        """
+        if not items:
+            return []
+
+        all_results = []
+        for i in range(0, len(items), 1000):
+            batch = items[i:i + 1000]
+            payload = {
+                "campaigns": [
+                    {
+                        "campaignId": str(it["campaign_id"]),
+                        "budget": {
+                            "budget": round_money(it["daily_budget"]),
+                            "budgetType": "DAILY",
+                        },
+                    }
+                    for it in batch
+                ]
+            }
+
+            resp = await self.request_api(
+                account=account,
+                method="PUT",
+                path="/sp/campaigns",
+                json_data=payload,
+                content_type="application/vnd.spCampaign.v3+json",
+                accept="application/vnd.spCampaign.v3+json",
+            )
+            parsed = self._parse_batch_mutation_response("campaigns", "campaignId", batch, resp)
+            all_results.extend(parsed)
+
+        return all_results
+
+    async def set_states(
+        self,
+        account: AdsAccount,
+        entity_type: str,
+        items: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        """
+        Update entity states (PAUSED/ENABLED) via official SP v3 endpoints.
+        entity_type: "keyword" | "target" | "campaign"
+        items: [{"entity_id": str, "state": str}, ...]
+        """
+        if not items:
+            return []
+
+        all_results = []
+        for i in range(0, len(items), 1000):
+            batch = items[i:i + 1000]
+            if entity_type == "keyword":
+                payload = {
+                    "keywords": [
+                        {
+                            "keywordId": str(it["entity_id"]),
+                            "state": it["state"],
+                        }
+                        for it in batch
+                    ]
+                }
+                resp = await self.request_api(
+                    account=account,
+                    method="PUT",
+                    path="/sp/keywords",
+                    json_data=payload,
+                    content_type="application/vnd.spKeyword.v3+json",
+                    accept="application/vnd.spKeyword.v3+json",
+                )
+                parsed = self._parse_batch_mutation_response("keywords", "keywordId", batch, resp)
+            elif entity_type == "target":
+                payload = {
+                    "targetingClauses": [
+                        {
+                            "targetId": str(it["entity_id"]),
+                            "state": it["state"],
+                        }
+                        for it in batch
+                    ]
+                }
+                resp = await self.request_api(
+                    account=account,
+                    method="PUT",
+                    path="/sp/targets",
+                    json_data=payload,
+                    content_type="application/vnd.spTargetingClause.v3+json",
+                    accept="application/vnd.spTargetingClause.v3+json",
+                )
+                parsed = self._parse_batch_mutation_response("targetingClauses", "targetId", batch, resp)
+            elif entity_type == "campaign":
+                payload = {
+                    "campaigns": [
+                        {
+                            "campaignId": str(it["entity_id"]),
+                            "state": it["state"],
+                        }
+                        for it in batch
+                    ]
+                }
+                resp = await self.request_api(
+                    account=account,
+                    method="PUT",
+                    path="/sp/campaigns",
+                    json_data=payload,
+                    content_type="application/vnd.spCampaign.v3+json",
+                    accept="application/vnd.spCampaign.v3+json",
+                )
+                parsed = self._parse_batch_mutation_response("campaigns", "campaignId", batch, resp)
+            else:
+                raise ValueError(f"Unsupported entity type for set_states: {entity_type}")
+
+            all_results.extend(parsed)
+
+        return all_results
+
+    async def create_negative_keywords(
+        self,
+        account: AdsAccount,
+        items: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        """
+        Create ad-group or campaign level negative keywords on Amazon Ads.
+        items: [{"campaign_id": str, "ad_group_id": Optional[str], "keyword_text": str, "match_type": str}, ...]
+        """
+        if not items:
+            return []
+
+        ad_group_items = [it for it in items if it.get("ad_group_id")]
+        campaign_items = [it for it in items if not it.get("ad_group_id")]
+
+        results = []
+
+        if ad_group_items:
+            for i in range(0, len(ad_group_items), 1000):
+                batch = ad_group_items[i:i + 1000]
+                payload = {
+                    "negativeKeywords": [
+                        {
+                            "campaignId": str(it["campaign_id"]),
+                            "adGroupId": str(it["ad_group_id"]),
+                            "keywordText": it["keyword_text"],
+                            "matchType": it["match_type"],
+                            "state": "ENABLED",
+                        }
+                        for it in batch
+                    ]
+                }
+                resp = await self.request_api(
+                    account=account,
+                    method="POST",
+                    path="/sp/negativeKeywords",
+                    json_data=payload,
+                    content_type="application/vnd.spNegativeKeyword.v3+json",
+                    accept="application/vnd.spNegativeKeyword.v3+json",
+                )
+                parsed = self._parse_batch_mutation_response("negativeKeywords", "negativeKeywordId", batch, resp)
+                results.extend(parsed)
+
+        if campaign_items:
+            for i in range(0, len(campaign_items), 1000):
+                batch = campaign_items[i:i + 1000]
+                payload = {
+                    "campaignNegativeKeywords": [
+                        {
+                            "campaignId": str(it["campaign_id"]),
+                            "keywordText": it["keyword_text"],
+                            "matchType": it["match_type"],
+                            "state": "ENABLED",
+                        }
+                        for it in batch
+                    ]
+                }
+                resp = await self.request_api(
+                    account=account,
+                    method="POST",
+                    path="/sp/campaignNegativeKeywords",
+                    json_data=payload,
+                    content_type="application/vnd.spCampaignNegativeKeyword.v3+json",
+                    accept="application/vnd.spCampaignNegativeKeyword.v3+json",
+                )
+                parsed = self._parse_batch_mutation_response("campaignNegativeKeywords", "campaignNegativeKeywordId", batch, resp)
+                results.extend(parsed)
+
+        return results
+
+    async def fetch_live_keywords(
+        self,
+        account: AdsAccount,
+        external_ids: list[str],
+    ) -> dict[str, dict[str, Any]]:
+        """
+        Fetch current live keywords from Amazon Ads via POST /sp/keywords/list.
+        Returns: {keywordId: {"bid": float, "state": str, ...}}
+        """
+        clean_ids = [str(x) for x in external_ids if x]
+        if not clean_ids:
+            return {}
+
+        results: dict[str, dict[str, Any]] = {}
+        for i in range(0, len(clean_ids), 1000):
+            batch = clean_ids[i:i + 1000]
+            payload = {
+                "keywordIdFilter": {"include": batch},
+                "maxResults": len(batch),
+            }
+            resp = await self.request_api(
+                account=account,
+                method="POST",
+                path="/sp/keywords/list",
+                json_data=payload,
+                content_type="application/vnd.spKeyword.v3+json",
+                accept="application/vnd.spKeyword.v3+json",
+            )
+            if resp.status_code == 200:
+                data = resp.json()
+                for kw in data.get("keywords", []):
+                    kid = str(kw.get("keywordId"))
+                    results[kid] = {
+                        "bid": float(kw["bid"]) if kw.get("bid") is not None else None,
+                        "state": kw.get("state"),
+                        "raw": kw,
+                    }
+            else:
+                logger.warning("fetch_live_keywords HTTP %s: %s", resp.status_code, resp.text)
+
+        return results
+
+    async def fetch_live_targets(
+        self,
+        account: AdsAccount,
+        external_ids: list[str],
+    ) -> dict[str, dict[str, Any]]:
+        """
+        Fetch current live targeting clauses from Amazon Ads via POST /sp/targets/list.
+        Returns: {targetId: {"bid": float, "state": str, ...}}
+        """
+        clean_ids = [str(x) for x in external_ids if x]
+        if not clean_ids:
+            return {}
+
+        results: dict[str, dict[str, Any]] = {}
+        for i in range(0, len(clean_ids), 1000):
+            batch = clean_ids[i:i + 1000]
+            payload = {
+                "targetIdFilter": {"include": batch},
+                "maxResults": len(batch),
+            }
+            resp = await self.request_api(
+                account=account,
+                method="POST",
+                path="/sp/targets/list",
+                json_data=payload,
+                content_type="application/vnd.spTargetingClause.v3+json",
+                accept="application/vnd.spTargetingClause.v3+json",
+            )
+            if resp.status_code == 200:
+                data = resp.json()
+                for tc in data.get("targetingClauses", []):
+                    tid = str(tc.get("targetId"))
+                    results[tid] = {
+                        "bid": float(tc["bid"]) if tc.get("bid") is not None else None,
+                        "state": tc.get("state"),
+                        "raw": tc,
+                    }
+            else:
+                logger.warning("fetch_live_targets HTTP %s: %s", resp.status_code, resp.text)
+
+        return results
+
+    async def fetch_live_campaigns(
+        self,
+        account: AdsAccount,
+        external_ids: list[str],
+    ) -> dict[str, dict[str, Any]]:
+        """
+        Fetch current live campaigns from Amazon Ads via POST /sp/campaigns/list.
+        Returns: {campaignId: {"daily_budget": float, "state": str, ...}}
+        """
+        clean_ids = [str(x) for x in external_ids if x]
+        if not clean_ids:
+            return {}
+
+        results: dict[str, dict[str, Any]] = {}
+        for i in range(0, len(clean_ids), 1000):
+            batch = clean_ids[i:i + 1000]
+            payload = {
+                "campaignIdFilter": {"include": batch},
+                "maxResults": len(batch),
+            }
+            resp = await self.request_api(
+                account=account,
+                method="POST",
+                path="/sp/campaigns/list",
+                json_data=payload,
+                content_type="application/vnd.spCampaign.v3+json",
+                accept="application/vnd.spCampaign.v3+json",
+            )
+            if resp.status_code == 200:
+                data = resp.json()
+                for c in data.get("campaigns", []):
+                    cid = str(c.get("campaignId"))
+                    b_val = c.get("budget", {}).get("budget")
+                    results[cid] = {
+                        "daily_budget": float(b_val) if b_val is not None else None,
+                        "state": c.get("state"),
+                        "raw": c,
+                    }
+            else:
+                logger.warning("fetch_live_campaigns HTTP %s: %s", resp.status_code, resp.text)
+
+        return results
 
     def search_brands(self, q: str = "") -> list[str]:
         # Negative brand search placeholder

@@ -157,7 +157,7 @@ async def test_marketplace_rules_endpoint(client_a: AsyncClient, account_a):
     resp = await client_a.get(f"/ads-accounts/{account_a.id}/rules")
     assert resp.status_code == 200
     assert resp.json()["currency"] == "INR"
-    assert resp.json()["min_budget"] == 50.0
+    assert resp.json()["min_budget"] == 100.0
 
 @pytest.mark.asyncio
 async def test_report_regression_no_settings_empty(client_a: AsyncClient, account_a, db_session):

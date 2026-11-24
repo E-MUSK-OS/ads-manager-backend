@@ -1,4 +1,5 @@
 from typing import Any
+from app.config import settings
 
 DATE_FILTERS = {
     "TODAY": "Today",
@@ -16,14 +17,29 @@ DATE_FILTERS = {
 METRICS = {  # key: (label, unit)  unit in count | money | percent | ratio
     "impressions": ("Impressions", "count"),
     "clicks": ("Clicks", "count"),
-    "orders": ("Orders", "count"),
-    "sales": ("Sales", "money"),
+    "orders": ("Purchases (7d)", "count"),
+    "sales": ("Sales (7d)", "money"),
     "acos": ("ACOS", "percent"),
     "roas": ("ROAS", "ratio"),
     "spend": ("Spend", "money"),
     "cpc": ("CPC", "money"),
     "ctr": ("CTR", "percent"),
     "cvr": ("CVR", "percent"),
+    "acos_vs_target": ("ACOS vs Target ACOS", "percent"),
+    "out_of_budget_days": ("Out of Budget Days", "count"),
+    # Derived metrics (Q9)
+    "target_spend_share": ("Target Spend Share", "percent"),
+    "target_sales_share": ("Target Sales Share", "percent"),
+    # Trend metrics (Q10)
+    "spend_change_pct": ("Spend Change", "percent"),
+    "sales_change_pct": ("Sales Change", "percent"),
+    "orders_change_pct": ("Purchases Change", "percent"),
+    "acos_change_pct": ("ACOS Change", "percent"),
+    "ctr_change_pct": ("CTR Change", "percent"),
+    "cvr_change_pct": ("CVR Change", "percent"),
+    "cpc_change_pct": ("CPC Change", "percent"),
+    # Entity age (Q11)
+    "entity_age_days": ("Entity Age", "count"),
 }
 
 OPERATORS = {
@@ -71,26 +87,50 @@ ACTIONS = {
     "TARGETING": {
         "INCREASE_BID": {
             "label": "Increase bid",
-            "params": {"pct": {"type": "percent", "min": 1, "max": 500, "default": 10, "label": "By %"}},
+            "params": {
+                "mode": {"type": "enum", "options": ["percent", "amount"], "default": "percent", "label": "Unit"},
+                "value": {"type": "percent", "default": 10, "min": 1, "max": 500, "label": "Value"},
+            },
         },
         "DECREASE_BID": {
             "label": "Decrease bid",
-            "params": {"pct": {"type": "percent", "min": 1, "max": 90, "default": 10, "label": "By %"}},
+            "params": {
+                "mode": {"type": "enum", "options": ["percent", "amount"], "default": "percent", "label": "Unit"},
+                "value": {"type": "percent", "default": 10, "min": 1, "max": 90, "label": "Value"},
+            },
         },
         "PAUSE_TARGET": {"label": "Pause target", "params": {}},
     },
     "CAMPAIGN": {
         "INCREASE_BUDGET": {
             "label": "Increase daily budget",
-            "params": {"pct": {"type": "percent", "min": 1, "max": 500, "default": 10, "label": "By %"}},
+            "params": {
+                "mode": {"type": "enum", "options": ["percent", "amount"], "default": "percent", "label": "Unit"},
+                "value": {"type": "percent", "default": 10, "min": 1, "max": 500, "label": "Value"},
+            },
         },
         "DECREASE_BUDGET": {
             "label": "Decrease daily budget",
-            "params": {"pct": {"type": "percent", "min": 1, "max": 90, "default": 10, "label": "By %"}},
+            "params": {
+                "mode": {"type": "enum", "options": ["percent", "amount"], "default": "percent", "label": "Unit"},
+                "value": {"type": "percent", "default": 10, "min": 1, "max": 90, "label": "Value"},
+            },
+        },
+        "SET_BUDGET": {
+            "label": "Set daily budget",
+            "params": {
+                "mode": {"type": "enum", "options": ["amount"], "default": "amount", "label": "Unit"},
+                "value": {"type": "money", "min": 100, "default": 100, "label": "Daily budget"},
+            },
+        },
+        "ENABLE_CAMPAIGN": {
+            "label": "Enable campaign",
+            "params": {},
+            "warning": "This will start spending",
         },
         "PAUSE_CAMPAIGN": {"label": "Pause campaign", "params": {}},
     },
-    "PLACEMENT": {  # Phase 5
+    "PLACEMENT": {  # Gated behind settings.ENABLE_PLACEMENT_RULES (F8, Q1)
         "INCREASE_PLACEMENT": {
             "label": "Increase placement adjustment",
             "params": {"points": {"type": "int", "min": 1, "max": 900, "default": 10, "label": "By percentage points"}},
@@ -107,32 +147,107 @@ CONFLICTS = [
     {"INCREASE_BID", "PAUSE_TARGET"},
     {"DECREASE_BID", "PAUSE_TARGET"},
     {"INCREASE_BUDGET", "DECREASE_BUDGET"},
+    {"INCREASE_BUDGET", "SET_BUDGET"},
+    {"DECREASE_BUDGET", "SET_BUDGET"},
     {"INCREASE_BUDGET", "PAUSE_CAMPAIGN"},
     {"DECREASE_BUDGET", "PAUSE_CAMPAIGN"},
+    {"SET_BUDGET", "PAUSE_CAMPAIGN"},
+    {"ENABLE_CAMPAIGN", "PAUSE_CAMPAIGN"},
     {"INCREASE_PLACEMENT", "DECREASE_PLACEMENT"},
     {"ADD_AS_TARGETING", "ADD_AS_NEGATIVE"},
 ]
 
+# Gallery templates: purely examples with thresholds left empty (None) for user to enter (F6, Q2)
 TEMPLATES = [
     {
         "key": "negate_wasted_terms",
         "category": "Search terms",
         "name": "Negate search terms that spend with no orders",
-        "description": "Stops paying for search terms that cost money and never convert.",
+        "description": "Example template — edit thresholds before saving. Flags non-converting search terms.",
         "affected_parameter": "SEARCH_TERM",
         "date_filter": "LAST_30_DAYS",
         "min_clicks": 0,
         "conditions": [
-            {"metric": "spend", "op": "GTE", "value": {"default": 10, "IN": 20}},
-            {"metric": "orders", "op": "LTE", "value": 0},
+            {"metric": "spend", "op": "GTE", "value": None},
+            {"metric": "orders", "op": "LTE", "value": None},
         ],
         "actions": [{"type": "ADD_AS_NEGATIVE", "params": {"match_type": "NEGATIVE_EXACT", "level": "AD_GROUP"}}],
+    },
+    {
+        "key": "pause_bleeding_targets",
+        "category": "Targeting",
+        "name": "Pause targets with many clicks and no orders",
+        "description": "Example template — edit thresholds before saving. Flags non-converting keywords.",
+        "affected_parameter": "TARGETING",
+        "date_filter": "LAST_30_DAYS",
+        "min_clicks": 0,
+        "conditions": [
+            {"metric": "clicks", "op": "GTE", "value": None},
+            {"metric": "orders", "op": "LTE", "value": None},
+        ],
+        "actions": [{"type": "PAUSE_TARGET", "params": {}}],
+    },
+    {
+        "key": "lower_bids_high_acos",
+        "category": "Targeting",
+        "name": "Lower bids on high-ACOS targets",
+        "description": "Example template — edit thresholds before saving. Trims bids on converting targets above target ACOS.",
+        "affected_parameter": "TARGETING",
+        "date_filter": "LAST_7_DAYS",
+        "min_clicks": 0,
+        "conditions": [
+            {"metric": "acos", "op": "GTE", "value": None},
+            {"metric": "orders", "op": "GTE", "value": None},
+        ],
+        "actions": [{"type": "DECREASE_BID", "params": {"mode": "percent", "value": 10}}],
+    },
+    {
+        "key": "raise_bids_efficient",
+        "category": "Targeting",
+        "name": "Raise bids on efficient targets",
+        "description": "Example template — edit thresholds before saving. Boosts bids for high-efficiency keywords.",
+        "affected_parameter": "TARGETING",
+        "date_filter": "LAST_30_DAYS",
+        "min_clicks": 0,
+        "conditions": [
+            {"metric": "acos", "op": "LTE", "value": None},
+            {"metric": "orders", "op": "GTE", "value": None},
+        ],
+        "actions": [{"type": "INCREASE_BID", "params": {"mode": "percent", "value": 10}}],
+    },
+    {
+        "key": "scale_winning_campaigns",
+        "category": "Campaigns",
+        "name": "Scale winning campaigns",
+        "description": "Example template — edit thresholds before saving. Expands budget on high-performing campaigns.",
+        "affected_parameter": "CAMPAIGN",
+        "date_filter": "LAST_7_DAYS",
+        "min_clicks": 0,
+        "conditions": [
+            {"metric": "roas", "op": "GTE", "value": None},
+            {"metric": "orders", "op": "GTE", "value": None},
+        ],
+        "actions": [{"type": "INCREASE_BUDGET", "params": {"mode": "percent", "value": 10}}],
+    },
+    {
+        "key": "cut_leaking_campaigns",
+        "category": "Campaigns",
+        "name": "Cut budget on leaking campaigns",
+        "description": "Example template — edit thresholds before saving. Scales back budget on unprofitable campaigns.",
+        "affected_parameter": "CAMPAIGN",
+        "date_filter": "LAST_7_DAYS",
+        "min_clicks": 0,
+        "conditions": [
+            {"metric": "acos", "op": "GTE", "value": None},
+            {"metric": "spend", "op": "GTE", "value": None},
+        ],
+        "actions": [{"type": "DECREASE_BUDGET", "params": {"mode": "percent", "value": 10}}],
     },
     {
         "key": "harvest_converting_terms",
         "category": "Search terms",
         "name": "Harvest converting search terms",
-        "description": "Promotes search terms that already convert efficiently to their own exact-match keyword.",
+        "description": "Example template — edit thresholds before saving. Promotes converting search terms.",
         "affected_parameter": "SEARCH_TERM",
         "date_filter": "LAST_30_DAYS",
         "min_clicks": 0,
@@ -143,81 +258,11 @@ TEMPLATES = [
         "actions": [{"type": "ADD_AS_TARGETING", "params": {"match_type": "EXACT"}}],
     },
     {
-        "key": "pause_bleeding_targets",
-        "category": "Targeting",
-        "name": "Pause targets with many clicks and no orders",
-        "description": "Pauses keywords that keep getting clicks without a single sale.",
-        "affected_parameter": "TARGETING",
-        "date_filter": "LAST_30_DAYS",
-        "min_clicks": 20,
-        "conditions": [
-            {"metric": "clicks", "op": "GTE", "value": 20},
-            {"metric": "orders", "op": "LTE", "value": 0},
-        ],
-        "actions": [{"type": "PAUSE_TARGET", "params": {}}],
-    },
-    {
-        "key": "lower_bids_high_acos",
-        "category": "Targeting",
-        "name": "Lower bids on high-ACOS targets",
-        "description": "Reduces bids where ACOS is too high but the target still converts.",
-        "affected_parameter": "TARGETING",
-        "date_filter": "LAST_7_DAYS",
-        "min_clicks": 10,
-        "conditions": [
-            {"metric": "acos", "op": "GTE", "value": 50},
-            {"metric": "orders", "op": "GTE", "value": 1},
-        ],
-        "actions": [{"type": "DECREASE_BID", "params": {"pct": 20}}],
-    },
-    {
-        "key": "raise_bids_efficient",
-        "category": "Targeting",
-        "name": "Raise bids on efficient targets",
-        "description": "Wins more traffic on targets with low ACOS and steady orders.",
-        "affected_parameter": "TARGETING",
-        "date_filter": "LAST_30_DAYS",
-        "min_clicks": 10,
-        "conditions": [
-            {"metric": "acos", "op": "LTE", "value": 15},
-            {"metric": "orders", "op": "GTE", "value": 3},
-        ],
-        "actions": [{"type": "INCREASE_BID", "params": {"pct": 15}}],
-    },
-    {
-        "key": "scale_winning_campaigns",
-        "category": "Campaigns",
-        "name": "Scale winning campaigns",
-        "description": "Adds budget to campaigns with strong return.",
-        "affected_parameter": "CAMPAIGN",
-        "date_filter": "LAST_7_DAYS",
-        "min_clicks": 0,
-        "conditions": [
-            {"metric": "roas", "op": "GTE", "value": 4},
-            {"metric": "orders", "op": "GTE", "value": 5},
-        ],
-        "actions": [{"type": "INCREASE_BUDGET", "params": {"pct": 20}}],
-    },
-    {
-        "key": "cut_leaking_campaigns",
-        "category": "Campaigns",
-        "name": "Cut budget on leaking campaigns",
-        "description": "Trims budget where ACOS is very high and spend is meaningful.",
-        "affected_parameter": "CAMPAIGN",
-        "date_filter": "LAST_7_DAYS",
-        "min_clicks": 0,
-        "conditions": [
-            {"metric": "acos", "op": "GTE", "value": 80},
-            {"metric": "spend", "op": "GTE", "value": {"default": 50, "IN": 300}},
-        ],
-        "actions": [{"type": "DECREASE_BUDGET", "params": {"pct": 25}}],
-    },
-    {
         "key": "boost_top_of_search",
         "category": "Placements",
         "name": "Boost placements that perform",
         "requires": "placement_metrics",
-        "description": "Raises the adjustment on placements with low ACOS.",
+        "description": "Example template — edit thresholds before saving. Raises adjustment on high-performing placements.",
         "affected_parameter": "PLACEMENT",
         "date_filter": "LAST_30_DAYS",
         "min_clicks": 10,
@@ -229,9 +274,39 @@ TEMPLATES = [
     },
 ]
 
+def get_visible_affected_parameters() -> dict[str, str]:
+    params = dict(AFFECTED_PARAMETERS)
+    if not getattr(settings, "ENABLE_PLACEMENT_RULES", False):
+        params.pop("PLACEMENT", None)
+    return params
+
+def get_visible_actions() -> dict[str, dict[str, Any]]:
+    actions = {k: dict(v) for k, v in ACTIONS.items()}
+    if not getattr(settings, "ENABLE_PLACEMENT_RULES", False):
+        actions.pop("PLACEMENT", None)
+    # ADD_AS_TARGETING stays hidden until approved per Q1
+    if "SEARCH_TERM" in actions and not getattr(settings, "ENABLE_ADD_AS_TARGETING", False):
+        actions["SEARCH_TERM"].pop("ADD_AS_TARGETING", None)
+    return actions
+
+def get_visible_templates() -> list[dict[str, Any]]:
+    templates = []
+    vis_actions = get_visible_actions()
+    for t in TEMPLATES:
+        if t["affected_parameter"] == "PLACEMENT" and not getattr(settings, "ENABLE_PLACEMENT_RULES", False):
+            continue
+        param = t["affected_parameter"]
+        allowed = vis_actions.get(param, {})
+        if any(a.get("type") not in allowed for a in t.get("actions", [])):
+            continue
+        templates.append(t)
+    return templates
+
 
 def resolve_value(v: Any, marketplace: str) -> Any:
     """Resolve a value that may be marketplace-dependent (e.g. {'default': 10, 'IN': 20})."""
+    if v is None:
+        return None
     if isinstance(v, dict):
         if marketplace in v:
             return v[marketplace]

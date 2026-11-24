@@ -1,5 +1,6 @@
 from datetime import date, datetime, timedelta, timezone
 import pytest
+from fastapi import HTTPException
 from httpx import AsyncClient
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -97,9 +98,11 @@ async def test_placements_reconcile_to_campaign_totals_in_db(
 
 @pytest.mark.asyncio
 async def test_placement_rule_creates_candidates_per_matching_placement(
-    db_session: AsyncSession, account_a: AdsAccount
+    db_session: AsyncSession, account_a: AdsAccount, monkeypatch
 ):
-    """A PLACEMENT rule generates Candidate items for matching (campaign, placement) pairs."""
+    """A PLACEMENT rule generates Candidate items for matching (campaign, placement) pairs when enabled."""
+    from app.config import settings
+    monkeypatch.setattr(settings, "ENABLE_PLACEMENT_RULES", True)
     provider = MockAdsProvider(db_session)
     await provider.generate_for_new_connection(account_a.id)
 
@@ -120,7 +123,7 @@ async def test_placement_rule_creates_candidates_per_matching_placement(
         is_active=True,
     )
 
-    candidates = await engine.evaluate(db_session, account_a, [rule], today=today, dry_run=True)
+    candidates, _ = await engine.evaluate(db_session, account_a, [rule], today=today, dry_run=True)
     assert len(candidates) > 0
 
     for c in candidates:
@@ -135,9 +138,11 @@ async def test_placement_rule_creates_candidates_per_matching_placement(
 
 @pytest.mark.asyncio
 async def test_placement_template_boost_top_of_search(
-    db_session: AsyncSession, account_a: AdsAccount
+    db_session: AsyncSession, account_a: AdsAccount, monkeypatch
 ):
-    """Verify the default template tpl_boost_top_of_search produces candidates on mock data."""
+    """Verify the default template tpl_boost_top_of_search produces candidates on mock data when enabled."""
+    from app.config import settings
+    monkeypatch.setattr(settings, "ENABLE_PLACEMENT_RULES", True)
     provider = MockAdsProvider(db_session)
     await provider.generate_for_new_connection(account_a.id)
 
@@ -147,6 +152,11 @@ async def test_placement_template_boost_top_of_search(
     tpl = next((t for t in TEMPLATES if t["key"] == "boost_top_of_search"), None)
     assert tpl is not None
     resolved = resolve_template(tpl, account_a.marketplace)
+    # Fill in sample thresholds for testing evaluation
+    test_conditions = [
+        {"metric": "acos", "op": "LTE", "value": 20.0},
+        {"metric": "orders", "op": "GTE", "value": 3.0},
+    ]
 
     rule = RecommendationRule(
         id=502,
@@ -156,13 +166,13 @@ async def test_placement_template_boost_top_of_search(
         affected_parameter=resolved["affected_parameter"],
         date_filter=resolved["date_filter"],
         min_clicks=resolved.get("min_clicks", 0),
-        conditions=resolved["conditions"],
+        conditions=test_conditions,
         actions=resolved["actions"],
         scope_mode="ALL",
         is_active=True,
     )
 
-    candidates = await engine.evaluate(db_session, account_a, [rule], today=today, dry_run=True)
+    candidates, _ = await engine.evaluate(db_session, account_a, [rule], today=today, dry_run=True)
     assert len(candidates) >= 1
     assert any(c.entity_label == "Top of Search" for c in candidates)
 
@@ -230,14 +240,15 @@ async def test_apply_changes_only_targeted_placement_percentage(
     await db_session.commit()
     await db_session.refresh(rec)
 
-    # Apply the recommendation
-    applied = await apply_recommendation(db_session, user_a, rec)
-    assert applied.status == "APPLIED"
+    # Apply the recommendation -> Placements are read-only per G5 and confirmed decisions
+    with pytest.raises(HTTPException) as exc_info:
+        await apply_recommendation(db_session, user_a, rec)
+    assert exc_info.value.status_code == 400
+    assert "Placements are read-only" in exc_info.value.detail
 
     await db_session.refresh(camp)
-    # placement_top_pct changed from 10 to 35
-    assert camp.placement_top_pct == 35
-    # Other two placement percentages MUST NOT change
+    # placement percentages MUST NOT change
+    assert camp.placement_top_pct == 10
     assert camp.placement_rest_pct == 20
     assert camp.placement_product_page_pct == 30
 
@@ -246,7 +257,7 @@ async def test_apply_changes_only_targeted_placement_percentage(
 async def test_apply_placement_clamps_between_0_and_900(
     db_session: AsyncSession, account_a: AdsAccount, user_a: User
 ):
-    """Verify clamping at 900 (upper) and 0 (lower)."""
+    """Verify placement apply is rejected as read-only."""
     camp = Campaign(
         ads_account_id=account_a.id,
         name="Placement Clamp Campaign",
@@ -300,9 +311,12 @@ async def test_apply_placement_clamps_between_0_and_900(
     )
     db_session.add(rec_high)
     await db_session.commit()
-    await apply_recommendation(db_session, user_a, rec_high)
+    with pytest.raises(HTTPException) as exc_info:
+        await apply_recommendation(db_session, user_a, rec_high)
+    assert exc_info.value.status_code == 400
+    assert "Placements are read-only" in exc_info.value.detail
     await db_session.refresh(camp)
-    assert camp.placement_top_pct == 900  # Clamped to 900
+    assert camp.placement_top_pct == 880  # Not changed
 
     # 2. Clamp to 0
     rec_low = Recommendation(
@@ -328,23 +342,26 @@ async def test_apply_placement_clamps_between_0_and_900(
     )
     db_session.add(rec_low)
     await db_session.commit()
-    await apply_recommendation(db_session, user_a, rec_low)
+    with pytest.raises(HTTPException) as exc_info:
+        await apply_recommendation(db_session, user_a, rec_low)
+    assert exc_info.value.status_code == 400
+    assert "Placements are read-only" in exc_info.value.detail
     await db_session.refresh(camp)
-    assert camp.placement_rest_pct == 0  # Clamped to 0
+    assert camp.placement_rest_pct == 15  # Not changed
 
 
 @pytest.mark.asyncio
 async def test_apply_placement_stale_check_raises_409(
     db_session: AsyncSession, account_a: AdsAccount, user_a: User
 ):
-    """If placement percentage on campaign changed after recommendation creation, apply raises 409."""
+    """Placement apply is rejected as read-only (G5)."""
     camp = Campaign(
         ads_account_id=account_a.id,
         name="Stale Placement Campaign",
         external_id="pl_stale_c1",
         state="ENABLED",
         daily_budget=50.0,
-        placement_top_pct=50,  # Changed to 50!
+        placement_top_pct=50,
     )
     db_session.add(camp)
     await db_session.commit()
@@ -374,7 +391,7 @@ async def test_apply_placement_stale_check_raises_409(
         entity_id=camp.id,
         entity_label="Top of Search",
         campaign_id=camp.id,
-        evidence={"current": {"placement": "TOP_OF_SEARCH", "pct": 10}},  # Expected 10, live is 50!
+        evidence={"current": {"placement": "TOP_OF_SEARCH", "pct": 10}},
         suggested_actions=[
             {
                 "type": "INCREASE_PLACEMENT",
@@ -389,17 +406,19 @@ async def test_apply_placement_stale_check_raises_409(
     db_session.add(rec)
     await db_session.commit()
 
-    from fastapi import HTTPException
-    with pytest.raises(HTTPException) as exc:
+    with pytest.raises(HTTPException) as exc_info:
         await apply_recommendation(db_session, user_a, rec)
-    assert exc.value.status_code == 409
+    assert exc_info.value.status_code == 400
+    assert "Placements are read-only" in exc_info.value.detail
 
 
 @pytest.mark.asyncio
 async def test_meta_and_crud_for_placement_rule(
-    client_a: AsyncClient, account_a: AdsAccount
+    client_a: AsyncClient, account_a: AdsAccount, monkeypatch
 ):
-    """Verify GET /meta shows PLACEMENT as available and creating a PLACEMENT rule succeeds."""
+    """Verify GET /meta shows PLACEMENT as available when enabled and creating a PLACEMENT rule succeeds."""
+    from app.config import settings
+    monkeypatch.setattr(settings, "ENABLE_PLACEMENT_RULES", True)
     # 1. GET /meta
     meta_res = await client_a.get(f"/recommendations/meta?ads_account_id={account_a.id}")
     assert meta_res.status_code == 200

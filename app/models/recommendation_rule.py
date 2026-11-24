@@ -22,6 +22,7 @@ class RecommendationRule(Base):
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
     last_run_at = Column(DateTime(timezone=True), nullable=True)
     last_match_count = Column(Integer, nullable=False, default=0, server_default="0")
+    last_funnel = Column(JSON, nullable=True)
 
     __table_args__ = (
         UniqueConstraint("ads_account_id", "name_key", name="uq_recommendation_rules_account_name_key"),

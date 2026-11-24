@@ -13,8 +13,12 @@ class CampaignHistory(Base):
     description = Column(Text, nullable=True)
     previous_value = Column(String, nullable=True)
     new_value = Column(String, nullable=True)
+    entity_type = Column(String, nullable=True)  # campaign | keyword | target | search_term
+    entity_id = Column(Integer, nullable=True)
+    recommendation_id = Column(Integer, ForeignKey("recommendations.id", ondelete="SET NULL"), nullable=True)
     user_id = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
     campaign = relationship("Campaign")
+    recommendation = relationship("Recommendation")
 

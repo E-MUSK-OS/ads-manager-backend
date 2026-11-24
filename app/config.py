@@ -32,6 +32,15 @@ class Settings(BaseSettings):
     RECOMMENDATION_ENGINE: str = "rules"
     SUPPORTED_MARKETPLACES: str = "IN"
     CONTACT_RETENTION_DAYS: int = 365
+    ENABLE_PLACEMENT_RULES: bool = False
+
+    # Recommendation Guards & Caps (Empty by default per C5, Q5, Q7, Q12, Q18)
+    ENTITY_CHANGE_GUARD_DAYS: Optional[int] = None
+    MAX_BID_CHANGE_PCT_CAP: Optional[float] = None
+    MAX_DAILY_BUDGET_INCREASE_CAP: Optional[float] = None
+    FREEZE_PERIODS: str = ""
+    AMAZON_REPORTING_LOOKBACK_DAYS: int = 60
+    DATA_FRESHNESS_HOURS: int = 24
 
     # Database
     DATABASE_URL: str

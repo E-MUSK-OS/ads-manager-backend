@@ -1,5 +1,6 @@
 from datetime import datetime, date, timezone, timedelta
 from typing import Any
+from decimal import Decimal, ROUND_HALF_UP
 try:
     from zoneinfo import ZoneInfo
 except ImportError:
@@ -20,7 +21,7 @@ MARKETPLACE_RULES: dict[str, dict[str, Any]] = {
         "tz": "Asia/Kolkata",
         "min_daily_budget": 100.0,
         "max_daily_budget": 20000000.0,
-        "min_budget": 50.0,
+        "min_budget": 100.0,
         "recommended_budget": 500.0,
         "min_bid": 1.0,
         "max_bid": 5000.0,
@@ -77,6 +78,9 @@ MARKETPLACE_RULES: dict[str, dict[str, Any]] = {
 }
 
 _FIXED_OFFSETS = {"Asia/Kolkata": timedelta(hours=5, minutes=30)}
+
+def round_money(val: float | int | str | Decimal) -> float:
+    return float(Decimal(str(val)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP))
 
 def marketplace_or_in(marketplace: str | None) -> dict[str, Any]:
     if marketplace and marketplace in MARKETPLACE_RULES:

@@ -1,4 +1,5 @@
-from datetime import datetime, timezone
+from datetime import datetime, timezone, date, timedelta
+from decimal import Decimal, ROUND_HALF_UP
 from typing import Optional, Any
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -12,6 +13,9 @@ from app.models.campaign import Campaign
 from app.models.recommendation_rule import RecommendationRule, RecommendationRuleCampaign
 from app.models.recommendation import Recommendation
 from app.models.recommendation_run import RecommendationRun
+from app.models.metric_daily import MetricDaily
+from app.recommendations.conflicts import check_rule_contradictions, check_rule_overlaps
+from app.config import settings
 from app.recommendations.registry import (
     DATE_FILTERS,
     METRICS,
@@ -21,6 +25,9 @@ from app.recommendations.registry import (
     TEMPLATES,
     LIMITS,
     resolve_template,
+    get_visible_affected_parameters,
+    get_visible_actions,
+    get_visible_templates,
 )
 from app.recommendations.schemas import (
     RuleIn,
@@ -29,8 +36,6 @@ from app.recommendations.schemas import (
     ActiveUpdate,
     ScopeUpdate,
     BulkRulesRequest,
-    ExportRulesRequest,
-    ImportRulesRequest,
     PreviewRequest,
     validate_rule_in,
 )
@@ -41,7 +46,9 @@ router = APIRouter(prefix="/recommendations", tags=["recommendations"])
 
 
 def format_rule_dict(rule: RecommendationRule, campaign_ids: list[int], open_count: int) -> dict:
-    if rule.scope_mode == "ALL":
+    if rule.affected_parameter == "PLACEMENT" and not getattr(settings, "ENABLE_PLACEMENT_RULES", False):
+        scope_label = "disabled (placements are read-only)"
+    elif rule.scope_mode == "ALL":
         scope_label = "All Campaigns"
     elif rule.scope_mode == "INCLUDE":
         scope_label = f"Include {len(campaign_ids)}"
@@ -65,6 +72,7 @@ def format_rule_dict(rule: RecommendationRule, campaign_ids: list[int], open_cou
         "updated_at": rule.updated_at,
         "last_run_at": rule.last_run_at,
         "last_match_count": rule.last_match_count,
+        "last_funnel": getattr(rule, "last_funnel", None),
         "open_count": open_count,
         "scope_label": scope_label,
     }
@@ -104,15 +112,15 @@ async def get_meta(
         "operators": {k: {"label": v[0], "symbol": v[1]} for k, v in OPERATORS.items()},
         "affected_parameters": {
             k: {"label": v, "available": True}
-            for k, v in AFFECTED_PARAMETERS.items()
+            for k, v in get_visible_affected_parameters().items()
         },
-        "actions": ACTIONS,
+        "actions": get_visible_actions(),
         "templates": [
             {
                 **resolve_template(t, account.marketplace),
                 "available": True,
             }
-            for t in TEMPLATES
+            for t in get_visible_templates()
         ],
         "limits": LIMITS,
         "currency": {
@@ -276,121 +284,6 @@ async def bulk_rules_action(
     return {"results": results}
 
 
-@router.post("/rules/export")
-async def export_rules(
-    payload: ExportRulesRequest,
-    db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
-):
-    rules_res = await db.execute(
-        select(RecommendationRule)
-        .join(AdsAccount, RecommendationRule.ads_account_id == AdsAccount.id)
-        .where(
-            RecommendationRule.id.in_(payload.ids),
-            AdsAccount.user_id == current_user.id,
-        )
-    )
-    rules = rules_res.scalars().all()
-
-    return {
-        "version": 1,
-        "exported_at": datetime.now(timezone.utc).isoformat(),
-        "rules": [
-            {
-                "name": r.name,
-                "affected_parameter": r.affected_parameter,
-                "date_filter": r.date_filter,
-                "min_clicks": r.min_clicks,
-                "conditions": r.conditions,
-                "actions": r.actions,
-                "scope_mode": r.scope_mode,
-            }
-            for r in rules
-        ],
-    }
-
-
-@router.post("/rules/import")
-async def import_rules(
-    payload: ImportRulesRequest,
-    db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
-):
-    account = await assert_owned_account(db, payload.ads_account_id, current_user)
-    results = []
-
-    for item in payload.rules:
-        name = str(item.get("name", "")).strip()
-        if not name:
-            results.append({"name": name, "status": "invalid", "reason": "Rule name is required"})
-            continue
-
-        # Check name clash in this account
-        clash = (
-            await db.execute(
-                select(RecommendationRule.id).where(
-                    RecommendationRule.ads_account_id == account.id,
-                    RecommendationRule.name_key == name.lower(),
-                )
-            )
-        ).scalars().first()
-        if clash:
-            results.append({
-                "name": name,
-                "status": "skipped",
-                "reason": f"A rule named '{name}' already exists",
-            })
-            continue
-
-        try:
-            rule_in = RuleIn(
-                name=name,
-                affected_parameter=item.get("affected_parameter"),
-                date_filter=item.get("date_filter", "LAST_30_DAYS"),
-                min_clicks=item.get("min_clicks", 0),
-                conditions=item.get("conditions", []),
-                actions=item.get("actions", []),
-                scope_mode="ALL",
-                is_active=False,
-                campaign_ids=[],
-            )
-        except Exception as e:
-            results.append({"name": name, "status": "invalid", "reason": str(e)})
-            continue
-
-        try:
-            await validate_rule_in(db, account, rule_in, rule_id=None)
-        except ServiceValidationError as e:
-            results.append({
-                "name": name,
-                "status": "invalid",
-                "reason": ", ".join(err["message"] for err in e.errors),
-            })
-            continue
-        except HTTPException as e:
-            results.append({"name": name, "status": "invalid", "reason": e.detail})
-            continue
-
-        new_rule = RecommendationRule(
-            ads_account_id=account.id,
-            name=name,
-            name_key=name.lower(),
-            affected_parameter=rule_in.affected_parameter,
-            date_filter=rule_in.date_filter,
-            min_clicks=rule_in.min_clicks,
-            conditions=[c.model_dump() for c in rule_in.conditions],
-            actions=[a.model_dump() for a in rule_in.actions],
-            scope_mode="ALL",
-            is_active=False,
-        )
-        db.add(new_rule)
-        await db.flush()
-        results.append({"name": name, "status": "created", "rule_id": new_rule.id})
-
-    await db.commit()
-    return {"results": results}
-
-
 @router.post("/rules/preview")
 async def preview_rule(
     payload: PreviewRequest,
@@ -402,11 +295,127 @@ async def preview_rule(
     from app.recommendations.engine import get_engine
     engine = get_engine()
     today = today_for(account.marketplace)
-    candidates = await engine.evaluate(db, account, [payload.rule], today=today, dry_run=True)
+    candidates, funnels = await engine.evaluate(db, account, [payload.rule], today=today, dry_run=True)
+    rule_key = getattr(payload.rule, "id", "draft") or "draft"
+    funnel = funnels.get(rule_key) or (list(funnels.values())[0] if funnels else None)
+
+    # 1. Contradictions within conditions (Q14)
+    conditions = [c.model_dump() if hasattr(c, "model_dump") else dict(c) for c in payload.rule.conditions]
+    contradiction_warnings = check_rule_contradictions(conditions)
+
+    # 2. Overlaps with other active rules for this account (Q14)
+    active_rules_res = await db.execute(
+        select(RecommendationRule).where(
+            RecommendationRule.ads_account_id == account.id,
+            RecommendationRule.is_active == True,
+        )
+    )
+    active_rules = active_rules_res.scalars().all()
+    active_rule_ids = [r.id for r in active_rules]
+    camps_map: dict[int, list[int]] = {}
+    if active_rule_ids:
+        c_res = await db.execute(
+            select(RecommendationRuleCampaign.rule_id, RecommendationRuleCampaign.campaign_id)
+            .where(RecommendationRuleCampaign.rule_id.in_(active_rule_ids))
+        )
+        for r_id, c_id in c_res.all():
+            camps_map.setdefault(r_id, []).append(c_id)
+
+    rules_with_camps = []
+    for r in active_rules:
+        setattr(r, "campaign_ids", camps_map.get(r.id, []))
+        rules_with_camps.append(r)
+
+    draft_camps = getattr(payload.rule, "campaign_ids", []) or []
+    overlap_warnings = check_rule_overlaps(
+        active_rules=rules_with_camps,
+        draft_param=payload.rule.affected_parameter,
+        draft_scope_mode=payload.rule.scope_mode,
+        draft_campaign_ids=draft_camps,
+        exclude_rule_id=getattr(payload.rule, "id", None) if isinstance(getattr(payload.rule, "id", None), int) else None,
+    )
+    warnings = contradiction_warnings + overlap_warnings
+
+    # 3. Backtest in preview (Q16)
+    backtest: Optional[dict[str, Any]] = None
+    backtest_date = today - timedelta(days=7)
+
+    earliest_date = None
+    camp_ids_stmt = select(Campaign.id).where(Campaign.ads_account_id == account.id)
+    acc_camp_ids = list((await db.execute(camp_ids_stmt)).scalars().all())
+    if acc_camp_ids:
+        earliest_stmt = select(func.min(MetricDaily.date)).where(
+            MetricDaily.entity_type == "campaign",
+            MetricDaily.entity_id.in_(acc_camp_ids),
+        )
+        earliest_date_raw = (await db.execute(earliest_stmt)).scalar()
+        earliest_date = date.fromisoformat(earliest_date_raw) if isinstance(earliest_date_raw, str) else earliest_date_raw
+
+    # Only show backtest if history is >= 14 days old (hidden if history is short per Q16)
+    if earliest_date and earliest_date <= (today - timedelta(days=14)):
+        back_candidates, _ = await engine.evaluate(
+            db, account, [payload.rule], today=backtest_date, dry_run=True
+        )
+        matched_count = len(back_candidates)
+        next_7d_spend = Decimal("0.00")
+        next_7d_orders = 0
+        next_7d_sales = Decimal("0.00")
+
+        if matched_count > 0:
+            eval_start = backtest_date + timedelta(days=1)
+            eval_end = today
+            kw_ids = [c.entity_id for c in back_candidates if c.entity_type in ("keyword", "target", "search_term") and c.entity_id]
+            camp_ids = [c.campaign_id for c in back_candidates if c.entity_type == "campaign" and c.campaign_id]
+
+            if kw_ids:
+                m_stmt = select(
+                    func.sum(MetricDaily.spend).label("spend"),
+                    func.sum(MetricDaily.orders).label("orders"),
+                    func.sum(MetricDaily.sales).label("sales"),
+                ).where(
+                    MetricDaily.entity_type == "keyword",
+                    MetricDaily.entity_id.in_(list(set(kw_ids))),
+                    MetricDaily.date >= eval_start,
+                    MetricDaily.date <= eval_end,
+                )
+                m_row = (await db.execute(m_stmt)).first()
+                if m_row:
+                    next_7d_spend += Decimal(str(m_row.spend or 0))
+                    next_7d_orders += int(m_row.orders or 0)
+                    next_7d_sales += Decimal(str(m_row.sales or 0))
+
+            if camp_ids:
+                c_stmt = select(
+                    func.sum(MetricDaily.spend).label("spend"),
+                    func.sum(MetricDaily.orders).label("orders"),
+                    func.sum(MetricDaily.sales).label("sales"),
+                ).where(
+                    MetricDaily.entity_type == "campaign",
+                    MetricDaily.entity_id.in_(list(set(camp_ids))),
+                    MetricDaily.date >= eval_start,
+                    MetricDaily.date <= eval_end,
+                )
+                c_row = (await db.execute(c_stmt)).first()
+                if c_row:
+                    next_7d_spend += Decimal(str(c_row.spend or 0))
+                    next_7d_orders += int(c_row.orders or 0)
+                    next_7d_sales += Decimal(str(c_row.sales or 0))
+
+        backtest = {
+            "eligible": True,
+            "matched_count": matched_count,
+            "next_7d_spend": float(next_7d_spend.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)),
+            "next_7d_orders": next_7d_orders,
+            "next_7d_sales": float(next_7d_sales.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)),
+        }
+
     return {
         "match_count": len(candidates),
         "evaluated_entities": getattr(engine, "last_evaluated_count", 0),
         "sample": [c.to_dict() for c in candidates[:5]],
+        "funnel": funnel,
+        "warnings": warnings,
+        "backtest": backtest,
     }
 
 
@@ -615,6 +624,7 @@ async def update_rule_scope(
 
 
 @router.post("/rules/{id}/duplicate", response_model=RuleResponse)
+@router.post("/rules/{id}/clone", response_model=RuleResponse)
 async def duplicate_rule(
     id: int,
     db: AsyncSession = Depends(get_db),
@@ -682,3 +692,28 @@ async def duplicate_rule(
     await db.refresh(new_rule)
 
     return format_rule_dict(new_rule, c_ids, 0)
+
+
+@router.post("/rules/{id}/run-now")
+async def run_rule_now(
+    id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Evaluates and persists recommendations exclusively for this rule (Q17)."""
+    rule, account = await load_owned_rule(db, id, current_user)
+    from app.recommendations.engine import run_engine
+    result = await run_engine(db, account, rule_ids=[rule.id], trigger="rule_run_now")
+    await db.commit()
+    await db.refresh(rule)
+    return {
+        "rule_id": rule.id,
+        "rule_name": rule.name,
+        "created": result.get("created", 0),
+        "expired": result.get("expired", 0),
+        "skipped": result.get("skipped", 0),
+        "funnel": rule.last_funnel,
+        "last_match_count": rule.last_match_count,
+        "last_run_at": rule.last_run_at.isoformat() if rule.last_run_at else None,
+        "notice": result.get("notice"),
+    }

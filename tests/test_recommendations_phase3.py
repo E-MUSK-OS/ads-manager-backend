@@ -38,6 +38,14 @@ async def test_each_template_produces_expected_candidates_on_fresh_account(
 
     for t in non_placement_templates:
         resolved = resolve_template(t, account_a.marketplace)
+        test_conditions = []
+        fallback_map = {"spend": 10.0, "orders": 1.0, "clicks": 5.0, "acos": 30.0, "roas": 2.0}
+        for c in resolved["conditions"]:
+            c_copy = dict(c)
+            if c_copy["value"] is None:
+                c_copy["value"] = fallback_map.get(c_copy["metric"], 10.0)
+            test_conditions.append(c_copy)
+
         rule = RecommendationRule(
             id=100,
             ads_account_id=account_a.id,
@@ -46,12 +54,12 @@ async def test_each_template_produces_expected_candidates_on_fresh_account(
             affected_parameter=resolved["affected_parameter"],
             date_filter=resolved["date_filter"],
             min_clicks=resolved.get("min_clicks", 0),
-            conditions=resolved["conditions"],
+            conditions=test_conditions,
             actions=resolved["actions"],
             scope_mode="ALL",
             is_active=True,
         )
-        candidates = await engine.evaluate(db_session, account_a, [rule], today=today, dry_run=True)
+        candidates, _ = await engine.evaluate(db_session, account_a, [rule], today=today, dry_run=True)
         assert len(candidates) >= 1, f"Template {t['key']} produced 0 candidates on fresh mock data"
 
         # Check candidate structure
@@ -88,12 +96,12 @@ async def test_acos_infinity_rule_semantics(db_session: AsyncSession, account_a:
     db_session.add(camp)
     await db_session.flush()
 
-    ag = AdGroup(campaign_id=camp.id, name="AG ACOS", default_bid=1.0)
+    ag = AdGroup(campaign_id=camp.id, name="AG ACOS", default_bid=10.0)
     db_session.add(ag)
     await db_session.flush()
 
-    kw_bleeding = Keyword(ad_group_id=ag.id, keyword_text="bleeding keyword", match_type="EXACT", bid=1.0, state="ENABLED")
-    kw_zero_spend = Keyword(ad_group_id=ag.id, keyword_text="zero spend keyword", match_type="EXACT", bid=1.0, state="ENABLED")
+    kw_bleeding = Keyword(ad_group_id=ag.id, keyword_text="bleeding keyword", match_type="EXACT", bid=10.0, state="ENABLED")
+    kw_zero_spend = Keyword(ad_group_id=ag.id, keyword_text="zero spend keyword", match_type="EXACT", bid=10.0, state="ENABLED")
     db_session.add_all([kw_bleeding, kw_zero_spend])
     await db_session.flush()
 
@@ -119,7 +127,20 @@ async def test_acos_infinity_rule_semantics(db_session: AsyncSession, account_a:
         sales=0.0,
         orders=0,
     )
-    db_session.add_all([m_bleeding, m_zero])
+    camp_metrics = [
+        MetricDaily(
+            entity_type="campaign",
+            entity_id=camp.id,
+            date=today - timedelta(days=d_offset),
+            impressions=100 if d_offset == 2 else 0,
+            clicks=25 if d_offset == 2 else 0,
+            spend=30.0 if d_offset == 2 else 0.0,
+            sales=0.0,
+            orders=0,
+        )
+        for d_offset in range(2, 9)
+    ]
+    db_session.add_all([m_bleeding, m_zero] + camp_metrics)
     await db_session.commit()
 
     # Rule 1: ACOS >= 50
@@ -135,7 +156,7 @@ async def test_acos_infinity_rule_semantics(db_session: AsyncSession, account_a:
         scope_mode="ALL",
         is_active=True,
     )
-    res_gte = await engine.evaluate(db_session, account_a, [rule_gte], today=today, dry_run=True)
+    res_gte, _ = await engine.evaluate(db_session, account_a, [rule_gte], today=today, dry_run=True)
     matched_ids_gte = [c.entity_id for c in res_gte]
     assert kw_bleeding.id in matched_ids_gte, "spend with no sales MUST match acos >= 50"
     assert kw_zero_spend.id not in matched_ids_gte, "spend == 0 must NOT match acos >= 50"
@@ -153,7 +174,7 @@ async def test_acos_infinity_rule_semantics(db_session: AsyncSession, account_a:
         scope_mode="ALL",
         is_active=True,
     )
-    res_lte = await engine.evaluate(db_session, account_a, [rule_lte], today=today, dry_run=True)
+    res_lte, _ = await engine.evaluate(db_session, account_a, [rule_lte], today=today, dry_run=True)
     matched_ids_lte = [c.entity_id for c in res_lte]
     assert kw_bleeding.id not in matched_ids_lte, "spend with no sales MUST NOT match acos <= 15"
     assert kw_zero_spend.id not in matched_ids_lte, "spend == 0 must NOT match acos <= 15"
@@ -212,7 +233,7 @@ async def test_min_clicks_skips_small_samples(db_session: AsyncSession, account_
         scope_mode="ALL",
         is_active=True,
     )
-    res_strict = await engine.evaluate(db_session, account_a, [rule_strict], today=today, dry_run=True)
+    res_strict, _ = await engine.evaluate(db_session, account_a, [rule_strict], today=today, dry_run=True)
     assert len(res_strict) == 0
 
     # Rule with min_clicks=5 should match
@@ -228,7 +249,7 @@ async def test_min_clicks_skips_small_samples(db_session: AsyncSession, account_
         scope_mode="ALL",
         is_active=True,
     )
-    res_lax = await engine.evaluate(db_session, account_a, [rule_lax], today=today, dry_run=True)
+    res_lax, _ = await engine.evaluate(db_session, account_a, [rule_lax], today=today, dry_run=True)
     assert len(res_lax) == 1
     assert res_lax[0].entity_id == kw.id
 
@@ -279,7 +300,7 @@ async def test_scope_include_exclude_and_paused_skipped(db_session: AsyncSession
     db_session.add(RecommendationRuleCampaign(rule_id=rule_inc.id, campaign_id=c1.id))
     await db_session.commit()
 
-    res_inc = await engine.evaluate(db_session, account_a, [rule_inc], today=today, dry_run=True)
+    res_inc, _ = await engine.evaluate(db_session, account_a, [rule_inc], today=today, dry_run=True)
     assert len(res_inc) == 1
     assert res_inc[0].campaign_id == c1.id
 
@@ -303,7 +324,7 @@ async def test_scope_include_exclude_and_paused_skipped(db_session: AsyncSession
     await db_session.commit()
     await db_session.commit()
 
-    res_exc = await engine.evaluate(db_session, account_a, [rule_exc], today=today, dry_run=True)
+    res_exc, _ = await engine.evaluate(db_session, account_a, [rule_exc], today=today, dry_run=True)
     assert len(res_exc) == 1
     assert res_exc[0].campaign_id == c2.id
 
@@ -674,7 +695,10 @@ async def test_bulk_apply_with_mixed_outcomes(client_a: AsyncClient, db_session:
     db_session.add_all([rec1, rec2])
     await db_session.commit()
 
-    r = await client_a.post("/recommendations/bulk", json={"ids": [rec1.id, rec2.id], "action": "APPLY"})
+    r = await client_a.post(
+        "/recommendations/bulk",
+        json={"ids": [rec1.id, rec2.id], "action": "APPLY", "confirm": True, "idempotency_key": "mixed_outcomes_1"},
+    )
     assert r.status_code == 200
     results = r.json()
     assert len(results) == 2
@@ -682,8 +706,10 @@ async def test_bulk_apply_with_mixed_outcomes(client_a: AsyncClient, db_session:
     res_map = {res["id"]: res for res in results}
     assert res_map[rec1.id]["success"] is True
     assert res_map[rec1.id]["error"] is None
+    assert res_map[rec1.id]["status"] == "APPLIED"
 
     assert res_map[rec2.id]["success"] is False
+    assert res_map[rec2.id]["status"] == "STALE"
     assert "This value changed since the analysis" in res_map[rec2.id]["error"]
 
     # Verify rec1 is APPLIED and kw1.bid was updated
