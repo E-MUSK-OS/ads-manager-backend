@@ -175,7 +175,10 @@ class AmazonAdsProvider(AdsProvider):
                     if error_type in ("invalid_grant", "unauthorized_client") or "invalid_grant" in resp.text:
                         account.connection_status = "reauth_required"
                         account.sync_status = "failed"
-                        await self.db.commit()
+                        if self.db.in_nested_transaction():
+                            await self.db.flush()
+                        else:
+                            await self.db.commit()
                         logger.warning("LWA refresh failed for account %s: marked as reauth_required", account.id)
                         raise HTTPException(
                             status_code=401,
@@ -207,7 +210,10 @@ class AmazonAdsProvider(AdsProvider):
             account.refresh_token_encrypted = encrypt(token_data["refresh_token"])
 
         self._access_token_cache[account.id] = (access_token, new_expires_at)
-        await self.db.commit()
+        if self.db.in_nested_transaction():
+            await self.db.flush()
+        else:
+            await self.db.commit()
 
         return access_token
 
@@ -1368,6 +1374,170 @@ class AmazonAdsProvider(AdsProvider):
                 results.extend(parsed)
 
         return results
+
+    async def create_keywords(
+        self,
+        account: AdsAccount,
+        items: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        """
+        Create Sponsored Products biddable keywords via POST /sp/keywords.
+        Doc: https://advertising.amazon.com/API/docs/en-us/sponsored-products/3-0/openapi/prod#/Keywords/createKeywords
+        Quote: "Creates one or more keywords."
+        items: [{"ad_group_id": str, "keyword_text": str, "match_type": str, "bid": float}, ...]
+        Returns aligned list: [{"keyword_id": Optional[str], "success": bool, "error": Optional[str]}, ...]
+        """
+        if not items:
+            return []
+
+        all_results = []
+        for i in range(0, len(items), 1000):
+            batch = items[i:i + 1000]
+            payload = {
+                "keywords": [
+                    {
+                        "adGroupId": str(it["ad_group_id"]),
+                        "keywordText": it["keyword_text"],
+                        "matchType": it["match_type"],
+                        "bid": round_money(it["bid"]),
+                        "state": "ENABLED",
+                    }
+                    for it in batch
+                ]
+            }
+
+            resp = await self.request_api(
+                account=account,
+                method="POST",
+                path="/sp/keywords",
+                json_data=payload,
+                content_type="application/vnd.spKeyword.v3+json",
+                accept="application/vnd.spKeyword.v3+json",
+            )
+            parsed = self._parse_batch_mutation_response("keywords", "keywordId", batch, resp)
+            all_results.extend(parsed)
+
+        return all_results
+
+    async def update_sp_keywords(
+        self,
+        account: AdsAccount,
+        items: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        """
+        Update Sponsored Products keywords (bids and/or state) via PUT /sp/keywords.
+        Doc: https://advertising.amazon.com/API/docs/en-us/sponsored-products/3-0/openapi/prod#/Keywords/updateKeywords
+        Quote: "Updates one or more keywords."
+        items: [{"keyword_id": str, "bid": Optional[float], "state": Optional[str]}, ...]
+        """
+        if not items:
+            return []
+
+        all_results = []
+        for i in range(0, len(items), 1000):
+            batch = items[i:i + 1000]
+            kw_payloads = []
+            for it in batch:
+                obj: dict[str, Any] = {"keywordId": str(it["keyword_id"])}
+                if it.get("bid") is not None:
+                    obj["bid"] = round_money(it["bid"])
+                if it.get("state") is not None:
+                    obj["state"] = it["state"]
+                kw_payloads.append(obj)
+
+            resp = await self.request_api(
+                account=account,
+                method="PUT",
+                path="/sp/keywords",
+                json_data={"keywords": kw_payloads},
+                content_type="application/vnd.spKeyword.v3+json",
+                accept="application/vnd.spKeyword.v3+json",
+            )
+            parsed = self._parse_batch_mutation_response("keywords", "keywordId", batch, resp)
+            all_results.extend(parsed)
+
+        return all_results
+
+    async def update_sp_targets(
+        self,
+        account: AdsAccount,
+        items: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        """
+        Update Sponsored Products targeting clauses (bids and/or state) via PUT /sp/targets.
+        Doc: https://advertising.amazon.com/API/docs/en-us/sponsored-products/3-0/openapi/prod#/Targeting%20Clauses/updateTargetingClauses
+        Quote: "Updates one or more targeting clauses."
+        items: [{"target_id": str, "bid": Optional[float], "state": Optional[str]}, ...]
+        """
+        if not items:
+            return []
+
+        all_results = []
+        for i in range(0, len(items), 1000):
+            batch = items[i:i + 1000]
+            tg_payloads = []
+            for it in batch:
+                obj: dict[str, Any] = {"targetId": str(it["target_id"])}
+                if it.get("bid") is not None:
+                    obj["bid"] = round_money(it["bid"])
+                if it.get("state") is not None:
+                    obj["state"] = it["state"]
+                tg_payloads.append(obj)
+
+            resp = await self.request_api(
+                account=account,
+                method="PUT",
+                path="/sp/targets",
+                json_data={"targetingClauses": tg_payloads},
+                content_type="application/vnd.spTargetingClause.v3+json",
+                accept="application/vnd.spTargetingClause.v3+json",
+            )
+            parsed = self._parse_batch_mutation_response("targetingClauses", "targetId", batch, resp)
+            all_results.extend(parsed)
+
+        return all_results
+
+    async def update_sp_campaigns_bulk(
+        self,
+        account: AdsAccount,
+        items: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        """
+        Update Sponsored Products campaigns (state and/or daily budget) via PUT /sp/campaigns.
+        Doc: https://advertising.amazon.com/API/docs/en-us/sponsored-products/3-0/openapi/prod#/Campaigns/updateCampaigns
+        Quote: "Updates one or more campaigns."
+        items: [{"campaign_id": str, "state": Optional[str], "daily_budget": Optional[float]}, ...]
+        """
+        if not items:
+            return []
+
+        all_results = []
+        for i in range(0, len(items), 1000):
+            batch = items[i:i + 1000]
+            camp_payloads = []
+            for it in batch:
+                obj: dict[str, Any] = {"campaignId": str(it["campaign_id"])}
+                if it.get("state") is not None:
+                    obj["state"] = it["state"]
+                if it.get("daily_budget") is not None:
+                    obj["budget"] = {
+                        "budget": round_money(it["daily_budget"]),
+                        "budgetType": "DAILY",
+                    }
+                camp_payloads.append(obj)
+
+            resp = await self.request_api(
+                account=account,
+                method="PUT",
+                path="/sp/campaigns",
+                json_data={"campaigns": camp_payloads},
+                content_type="application/vnd.spCampaign.v3+json",
+                accept="application/vnd.spCampaign.v3+json",
+            )
+            parsed = self._parse_batch_mutation_response("campaigns", "campaignId", batch, resp)
+            all_results.extend(parsed)
+
+        return all_results
 
     async def fetch_live_keywords(
         self,

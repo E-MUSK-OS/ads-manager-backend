@@ -144,12 +144,29 @@ def test_config_production_and_strict_validation():
             DATABASE_URL="sqlite+aiosqlite://",
             JWT_SECRET_KEY="a" * 32,
             FRONTEND_URL="http://app.example.com",
+            FRONTEND_BASE_URL="https://app.example.com",
             AMAZON_LWA_CLIENT_ID="mock_id",
             AMAZON_LWA_CLIENT_SECRET="mock_secret",
             AMAZON_LWA_REDIRECT_URI="https://app.example.com/callback",
             TOKEN_ENCRYPTION_KEY="mock_token_key",
         )
     assert "FRONTEND_URL" in str(exc2.value)
+
+    # 2b. Production + missing FRONTEND_BASE_URL fails
+    with pytest.raises(ValueError) as exc2b:
+        Settings(
+            ENVIRONMENT="production",
+            ADS_PROVIDER="amazon",
+            DATABASE_URL="sqlite+aiosqlite://",
+            JWT_SECRET_KEY="a" * 32,
+            FRONTEND_URL="https://app.example.com",
+            FRONTEND_BASE_URL=None,
+            AMAZON_LWA_CLIENT_ID="mock_id",
+            AMAZON_LWA_CLIENT_SECRET="mock_secret",
+            AMAZON_LWA_REDIRECT_URI="https://app.example.com/callback",
+            TOKEN_ENCRYPTION_KEY="mock_token_key",
+        )
+    assert "FRONTEND_BASE_URL" in str(exc2b.value)
 
     # 3. Production + valid values passes
     prod_settings = Settings(
@@ -158,6 +175,7 @@ def test_config_production_and_strict_validation():
         DATABASE_URL="sqlite+aiosqlite://",
         JWT_SECRET_KEY="a" * 32,
         FRONTEND_URL="https://app.example.com, https://admin.example.com",
+        FRONTEND_BASE_URL="https://app.example.com",
         AMAZON_LWA_CLIENT_ID="mock_id",
         AMAZON_LWA_CLIENT_SECRET="mock_secret",
         AMAZON_LWA_REDIRECT_URI="https://app.example.com/callback",

@@ -19,9 +19,9 @@ MARKETPLACE_RULES: dict[str, dict[str, Any]] = {
         "locale": "en-IN",
         "timezone": "Asia/Kolkata",
         "tz": "Asia/Kolkata",
-        "min_daily_budget": 100.0,
+        "min_daily_budget": 100.0,  # App safety floor, not a verified Amazon limit
         "max_daily_budget": 20000000.0,
-        "min_budget": 100.0,
+        "min_budget": 100.0,  # App safety floor, not a verified Amazon limit
         "recommended_budget": 500.0,
         "min_bid": 1.0,
         "max_bid": 5000.0,

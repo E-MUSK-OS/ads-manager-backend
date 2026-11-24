@@ -1939,6 +1939,14 @@ async def run_engine(
     trigger: str = "manual",
 ) -> dict[str, Any]:
     started_at = datetime.now(timezone.utc)
+    if not account.is_active or account.connection_status != "connected":
+        return {
+            "created": 0,
+            "expired": 0,
+            "skipped": 0,
+            "finished_at": started_at.isoformat(),
+            "notice": "Account is inactive or disconnected — recommendation generation skipped",
+        }
     engine = get_engine()
 
     # Query active rules for this account

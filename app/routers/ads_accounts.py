@@ -43,10 +43,17 @@ async def get_provider_mode():
 
 @router.get("", response_model=list[AdsAccountResponse])
 async def list_accounts(
+    include_inactive: bool = False,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    result = await db.execute(select(AdsAccount).where(AdsAccount.user_id == current_user.id))
+    stmt = select(AdsAccount).where(AdsAccount.user_id == current_user.id)
+    if not include_inactive:
+        stmt = stmt.where(
+            AdsAccount.is_active == True,
+            AdsAccount.connection_status == "connected",
+        )
+    result = await db.execute(stmt)
     return result.scalars().all()
 
 
@@ -69,6 +76,11 @@ async def sync_account(
     current_user: User = Depends(get_current_user)
 ):
     account = await assert_owned_account(db, account_id, current_user)
+    if not account.is_active or account.connection_status != "connected":
+        raise HTTPException(
+            status_code=400,
+            detail="Cannot sync an inactive or disconnected ads account.",
+        )
     provider = get_ads_provider(db, account)
     try:
         res = await provider.sync_account_data(account.id, days_back=days_back, force=force)
@@ -135,28 +147,31 @@ async def disconnect_account(
     current_user: User = Depends(get_current_user)
 ):
     """
-    Disconnect an ads account and delete its stored credentials and data.
+    Disconnect an ads account and revoke stored credentials while preserving historical reporting.
     """
     account = await assert_owned_account(db, account_id, current_user)
     account.refresh_token_encrypted = None
     account.access_token_expires_at = None
     account.connection_status = "disconnected"
     account.is_active = False
-    await db.delete(account)
     await db.commit()
     return {"status": "ok", "message": f"Account {account_id} disconnected and stored tokens deleted"}
 
 
 # =========================================================================
-# Login with Amazon (LWA) OAuth 2.0 Endpoints
+# Login with Amazon (LWA) OAuth 2.0 Endpoints (DEPRECATED)
+# Note: These legacy routes (/ads-accounts/amazon/*) are deprecated in favor of
+# /amazon-ads/connect and /amazon-ads/callback (Section A4 contract).
+# Retained for existing accounts until full migration is confirmed.
 # =========================================================================
 
-@router.get("/amazon/authorize-url", response_model=LWAAuthorizeUrlResponse)
+@router.get("/amazon/authorize-url", response_model=LWAAuthorizeUrlResponse, deprecated=True)
 async def get_amazon_authorize_url(
     current_user: User = Depends(get_current_user)
 ):
     """
-    Generate the LWA authorization URL with a signed, short-lived CSRF state JWT.
+    [DEPRECATED] Generate the LWA authorization URL with a signed, short-lived CSRF state JWT.
+    New integrations should use POST /amazon-ads/connect.
     """
     if not settings.AMAZON_LWA_CLIENT_ID or not settings.AMAZON_LWA_REDIRECT_URI:
         raise HTTPException(
@@ -185,14 +200,15 @@ async def get_amazon_authorize_url(
     return LWAAuthorizeUrlResponse(url=authorize_url)
 
 
-@router.post("/amazon/callback", response_model=list[AdsAccountResponse])
+@router.post("/amazon/callback", response_model=list[AdsAccountResponse], deprecated=True)
 async def handle_amazon_callback(
     payload: LWACallbackRequest,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
     """
-    Handle LWA authorization-code callback:
+    [DEPRECATED] Handle legacy LWA authorization-code callback via frontend POST.
+    New flow uses the public browser GET /amazon-ads/callback directly.
     1. Validate signed state JWT and user ownership.
     2. Exchange authorization code for LWA access & refresh tokens.
     3. Encrypt and persist the refresh token.

@@ -84,6 +84,7 @@ def test_provider_factory_choice(db_session, account_a):
     account_a.is_mock = False
     provider = get_ads_provider(db_session, account_a)
     assert isinstance(provider, AmazonAdsProvider)
+    account_a.is_mock = True
 
 
 # ---------------------------------------------------------------------------
@@ -370,14 +371,32 @@ async def test_disconnect_account(client_a, db_session, user_a):
     await db_session.commit()
     await db_session.refresh(acc)
 
-    # User A disconnects the account
+    # User A disconnects the account via legacy delete route
     resp = await client_a.delete(f"/ads-accounts/{acc.id}")
     assert resp.status_code == 200
     assert resp.json()["status"] == "ok"
 
-    # Account is permanently removed
-    res = await db_session.execute(select(AdsAccount).where(AdsAccount.id == acc.id))
-    assert res.scalar_one_or_none() is None
+    # Soft disconnect: Account row is preserved, tokens wiped, status=disconnected, is_active=False
+    await db_session.refresh(acc)
+    assert acc.connection_status == "disconnected"
+    assert acc.is_active is False
+    assert acc.refresh_token_encrypted is None
+
+    # Hidden from lists
+    list_resp = await client_a.get("/ads-accounts")
+    assert list_resp.status_code == 200
+    account_ids = [a["id"] for a in list_resp.json()]
+    assert acc.id not in account_ids
+
+    # Skipped / rejected by sync
+    sync_resp = await client_a.post(f"/ads-accounts/{acc.id}/sync")
+    assert sync_resp.status_code == 400
+    assert "inactive or disconnected" in sync_resp.json()["detail"]
+
+    # Skipped / rejected by recommendations trigger
+    rec_resp = await client_a.post("/recommendations/run", json={"ads_account_id": acc.id})
+    assert rec_resp.status_code == 400
+    assert "inactive or disconnected" in rec_resp.json()["detail"]
 
 
 # ---------------------------------------------------------------------------

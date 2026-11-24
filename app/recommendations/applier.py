@@ -77,6 +77,11 @@ async def apply_action(
 
 async def check_apply_guardrails(db: AsyncSession, account: AdsAccount) -> None:
     """Verifies profile and sync constraints before any write attempt."""
+    if not account.is_active or account.connection_status != "connected":
+        raise HTTPException(
+            status_code=400,
+            detail="Cannot apply recommendations to an inactive or disconnected ads account",
+        )
     if account.profile_id and "dummy" in account.profile_id.lower():
         raise HTTPException(
             status_code=400,

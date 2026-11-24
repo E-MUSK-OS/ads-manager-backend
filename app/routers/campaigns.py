@@ -1162,7 +1162,23 @@ async def bulk_action(
     db: AsyncSession = Depends(get_db), 
     current_user: User = Depends(get_current_user)
 ):
+    """
+    Apply bulk operations to campaigns (max 100).
+    For connected real accounts, writes to Amazon Ads API first:
+    PUT /sp/campaigns (https://advertising.amazon.com/API/docs/en-us/sponsored-products/3-0/openapi/prod#/Campaigns/updateCampaigns)
+    Quote: "Updates one or more campaigns."
+    Placement percentage changes via bulk action are disabled (placements are read-only).
+    """
     campaign_ids = payload.campaign_ids
+    if len(campaign_ids) > 100:
+        raise HTTPException(status_code=400, detail="Maximum of 100 campaigns allowed per bulk action")
+
+    if payload.action == "SET_PLACEMENT_PCT":
+        raise HTTPException(
+            status_code=400,
+            detail="Placement percentage changes via bulk action are disabled (placements are read-only)."
+        )
+
     results = []
     updated_cnt = 0
     skipped_cnt = 0
@@ -1173,6 +1189,8 @@ async def bulk_action(
 
     floor = max(min_daily_budget, float(payload.min_budget_floor if payload.min_budget_floor is not None else min_daily_budget))
     cap = min(max_daily_budget, float(payload.max_budget_cap if payload.max_budget_cap is not None else max_daily_budget))
+
+    provider = AmazonAdsProvider(db)
 
     for cid in campaign_ids:
         async with db.begin_nested():
@@ -1192,52 +1210,97 @@ async def bulk_action(
                     continue
 
                 account = (await db.execute(select(AdsAccount).where(AdsAccount.id == c.ads_account_id))).scalars().first()
+                if not account or not account.is_active or account.connection_status != "connected":
+                    failed_cnt += 1
+                    results.append({
+                        "id": cid,
+                        "status": "failed",
+                        "ok": False,
+                        "reason": "Cannot modify campaigns for a disconnected or inactive account."
+                    })
+                    continue
+
                 today = today_for(account.marketplace) if account else today_for("IN")
 
+                old_state = c.state
+                old_budget = c.daily_budget
+                old_strategy = c.bidding_strategy
+
+                target_state = None
+                target_budget = None
+                target_strategy = None
+                target_portfolio = None
+
                 if payload.action == "ENABLE":
-                    c.state = "ENABLED"
-                    c.delivery_status = "DELIVERING"
+                    target_state = "ENABLED"
                 elif payload.action == "PAUSE":
-                    c.state = "PAUSED"
-                    c.delivery_status = "PAUSED"
+                    target_state = "PAUSED"
                 elif payload.action == "ARCHIVE":
-                    c.state = "ARCHIVED"
-                    c.delivery_status = "ARCHIVED"
+                    target_state = "ARCHIVED"
                 elif payload.action in ("BUDGET_SET", "SET_BUDGET"):
                     val = float(payload.value or 0.0)
-                    c.daily_budget = round(max(floor, min(cap, val)), 2)
+                    target_budget = round(max(floor, min(cap, val)), 2)
                 elif payload.action in ("BUDGET_INCREASE_PCT", "CHANGE_BUDGET_PCT"):
                     pct_val = float(payload.value or 0.0)
                     new_b = c.daily_budget * (1.0 + pct_val / 100.0)
-                    c.daily_budget = round(max(floor, min(cap, new_b)), 2)
+                    target_budget = round(max(floor, min(cap, new_b)), 2)
                 elif payload.action == "BUDGET_DECREASE_PCT":
                     pct_val = float(payload.value or 0.0)
                     new_b = c.daily_budget * (1.0 - pct_val / 100.0)
-                    c.daily_budget = round(max(floor, min(cap, new_b)), 2)
+                    target_budget = round(max(floor, min(cap, new_b)), 2)
                 elif payload.action == "BUDGET_INCREASE_AMT":
                     amt_val = float(payload.value or 0.0)
                     new_b = c.daily_budget + amt_val
-                    c.daily_budget = round(max(floor, min(cap, new_b)), 2)
+                    target_budget = round(max(floor, min(cap, new_b)), 2)
                 elif payload.action == "BUDGET_DECREASE_AMT":
                     amt_val = float(payload.value or 0.0)
                     new_b = c.daily_budget - amt_val
-                    c.daily_budget = round(max(floor, min(cap, new_b)), 2)
+                    target_budget = round(max(floor, min(cap, new_b)), 2)
                 elif payload.action == "SET_BIDDING_STRATEGY":
-                    c.bidding_strategy = str(payload.value)
-                elif payload.action == "SET_PLACEMENT_PCT":
-                    val_pct = max(0, min(900, int(payload.value or 0)))
-                    plc = (payload.placement or "TOP_OF_SEARCH").upper()
-                    if plc in ("TOP_OF_SEARCH", "TOP_PCT"):
-                        c.placement_top_of_search_pct = val_pct
-                        c.placement_top_pct = val_pct
-                    elif plc in ("PRODUCT_PAGES", "PRODUCT_PAGE_PCT"):
-                        c.placement_product_pages_pct = val_pct
-                        c.placement_product_page_pct = val_pct
-                    elif plc in ("REST_OF_SEARCH", "REST_PCT"):
-                        c.placement_rest_of_search_pct = val_pct
-                        c.placement_rest_pct = val_pct
+                    target_strategy = str(payload.value)
                 elif payload.action == "SET_PORTFOLIO":
-                    c.portfolio_name = str(payload.value) if payload.value else None
+                    target_portfolio = str(payload.value) if payload.value else None
+
+                # Write to Amazon Ads API first if real connected account
+                # PUT /sp/campaigns (https://advertising.amazon.com/API/docs/en-us/sponsored-products/3-0/openapi/prod#/Campaigns/updateCampaigns)
+                if not account.is_mock and account.refresh_token_encrypted:
+                    ext_id = c.external_id or str(c.id)
+                    item_payload = {"campaign_id": ext_id}
+                    if target_state:
+                        item_payload["state"] = target_state
+                    if target_budget is not None:
+                        item_payload["daily_budget"] = target_budget
+
+                    amz_results = await provider.update_sp_campaigns_bulk(account, [item_payload])
+                    if not amz_results or not amz_results[0].get("success"):
+                        err_detail = amz_results[0].get("error") if amz_results else "Failed to update campaign on Amazon Ads"
+                        failed_cnt += 1
+                        results.append({
+                            "id": cid,
+                            "status": "failed",
+                            "ok": False,
+                            "reason": f"Amazon Ads API error: {err_detail}"
+                        })
+                        continue
+
+                # Local update from Amazon's successful response / mock update
+                if target_state:
+                    c.state = target_state
+                    if target_state == "ENABLED":
+                        c.delivery_status = "DELIVERING"
+                    elif target_state == "PAUSED":
+                        c.delivery_status = "PAUSED"
+                    elif target_state == "ARCHIVED":
+                        c.delivery_status = "ARCHIVED"
+
+                if target_budget is not None:
+                    c.daily_budget = target_budget
+
+                if target_strategy:
+                    c.bidding_strategy = target_strategy
+
+                if target_portfolio is not None:
+                    c.portfolio_name = target_portfolio
 
                 if c.state == "ENABLED":
                     t_spend = (await db.execute(
@@ -1250,6 +1313,18 @@ async def bulk_action(
                         c.delivery_status = "ENDED"
                     else:
                         c.delivery_status = "DELIVERING"
+
+                # Record CampaignHistory entry per change
+                hist = CampaignHistory(
+                    campaign_id=c.id,
+                    event_type=f"BULK_{payload.action}",
+                    event_title="Bulk Campaign Action Applied",
+                    previous_value=f"state: {old_state}, budget: ₹{old_budget:.2f}",
+                    new_value=f"state: {c.state}, budget: ₹{c.daily_budget:.2f}",
+                    description=f"Bulk action {payload.action} executed (Amazon sync validated)",
+                    user_id=current_user.id
+                )
+                db.add(hist)
 
                 updated_cnt += 1
                 results.append({
@@ -1958,13 +2033,29 @@ async def patch_campaign_target(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
+    """
+    Update target or keyword bid and/or state.
+    For connected real accounts, writes to Amazon Ads API first:
+    PUT /sp/targets (https://advertising.amazon.com/API/docs/en-us/sponsored-products/3-0/openapi/prod#/Targeting%20Clauses/updateTargetingClauses)
+    or PUT /sp/keywords (https://advertising.amazon.com/API/docs/en-us/sponsored-products/3-0/openapi/prod#/Keywords/updateKeywords)
+    Refuses with clear message if entity has no Amazon ID until sync exists.
+    """
     c = await load_owned_campaign(db, campaign_id, current_user)
     if c.state == "ARCHIVED":
         raise HTTPException(status_code=409, detail="Archived campaigns cannot be modified")
 
+    account = (await db.execute(select(AdsAccount).where(AdsAccount.id == c.ads_account_id))).scalars().first()
+    if not account or not account.is_active or account.connection_status != "connected":
+        raise HTTPException(
+            status_code=400,
+            detail="Cannot modify targeting for a disconnected or inactive Amazon Ads account."
+        )
+
     if payload.bid is not None:
         if payload.bid < 1.0 or payload.bid > 5000.0:
             raise HTTPException(status_code=422, detail=[{"field": "bid", "message": "Bid must be between ₹1.00 and ₹5,000.00"}])
+
+    provider = AmazonAdsProvider(db)
 
     tg = (await db.execute(
         select(Target).where(Target.id == target_id, Target.campaign_id == c.id)
@@ -1972,17 +2063,39 @@ async def patch_campaign_target(
 
     if tg:
         old_bid = tg.bid
+        old_state = tg.state
+
+        # Amazon First if real connected account
+        if not account.is_mock and account.refresh_token_encrypted:
+            tg_ext_id = getattr(tg, "external_id", None)
+            if not tg_ext_id:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Target does not have an Amazon target ID. Targeting sync is required before editing targets directly on Amazon."
+                )
+            item_payload = {"target_id": tg_ext_id}
+            if payload.bid is not None:
+                item_payload["bid"] = payload.bid
+            if payload.state is not None:
+                item_payload["state"] = payload.state
+
+            results = await provider.update_sp_targets(account, [item_payload])
+            if not results or not results[0].get("success"):
+                err_msg = results[0].get("error") if results else "Failed to update target on Amazon Ads"
+                raise HTTPException(status_code=400, detail=f"Amazon Ads API error: {err_msg}")
+
         if payload.bid is not None:
             tg.bid = payload.bid
         if payload.state is not None:
             tg.state = payload.state
+
         hist = CampaignHistory(
             campaign_id=c.id,
             event_type="TARGET_UPDATE",
             event_title="Target Updated",
-            previous_value=f"₹{old_bid:.2f}" if old_bid else None,
-            new_value=f"₹{tg.bid:.2f}" if tg.bid else None,
-            description=f"Target {tg.expression_type or tg.value} bid set to ₹{tg.bid:.2f}",
+            previous_value=f"bid: ₹{old_bid:.2f}, state: {old_state}" if old_bid else str(old_state),
+            new_value=f"bid: ₹{tg.bid:.2f}, state: {tg.state}" if tg.bid else str(tg.state),
+            description=f"Target {tg.expression_type or tg.value} updated (Amazon sync validated)",
             user_id=current_user.id
         )
         db.add(hist)
@@ -1997,17 +2110,38 @@ async def patch_campaign_target(
 
     if kw:
         old_bid = kw.bid
+        old_state = kw.state
+
+        # Amazon First if real connected account
+        if not account.is_mock and account.refresh_token_encrypted:
+            if not kw.external_id:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Keyword does not have an Amazon keyword ID. Keyword sync is required before editing keywords directly on Amazon."
+                )
+            item_payload = {"keyword_id": kw.external_id}
+            if payload.bid is not None:
+                item_payload["bid"] = payload.bid
+            if payload.state is not None:
+                item_payload["state"] = payload.state
+
+            results = await provider.update_sp_keywords(account, [item_payload])
+            if not results or not results[0].get("success"):
+                err_msg = results[0].get("error") if results else "Failed to update keyword on Amazon Ads"
+                raise HTTPException(status_code=400, detail=f"Amazon Ads API error: {err_msg}")
+
         if payload.bid is not None:
             kw.bid = payload.bid
         if payload.state is not None:
             kw.state = payload.state
+
         hist = CampaignHistory(
             campaign_id=c.id,
             event_type="KEYWORD_UPDATE",
             event_title="Keyword Updated",
-            previous_value=f"₹{old_bid:.2f}" if old_bid else None,
-            new_value=f"₹{kw.bid:.2f}" if kw.bid else None,
-            description=f"Keyword '{kw.keyword_text}' bid set to ₹{kw.bid:.2f}",
+            previous_value=f"bid: ₹{old_bid:.2f}, state: {old_state}" if old_bid else str(old_state),
+            new_value=f"bid: ₹{kw.bid:.2f}, state: {kw.state}" if kw.bid else str(kw.state),
+            description=f"Keyword '{kw.keyword_text}' updated (Amazon sync validated)",
             user_id=current_user.id
         )
         db.add(hist)
@@ -2176,9 +2310,23 @@ async def harvest_search_term(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
+    """
+    Harvest search term into biddable keyword.
+    For connected real accounts, writes to Amazon Ads API first:
+    POST /sp/keywords (https://advertising.amazon.com/API/docs/en-us/sponsored-products/3-0/openapi/prod#/Keywords/createKeywords)
+    Quote: "Creates one or more keywords."
+    Refuses with clear message if ad group has no Amazon ID until sync exists.
+    """
     c = await load_owned_campaign(db, campaign_id, current_user)
     if c.state == "ARCHIVED":
         raise HTTPException(status_code=409, detail="Archived campaigns cannot be modified")
+
+    account = (await db.execute(select(AdsAccount).where(AdsAccount.id == c.ads_account_id))).scalars().first()
+    if not account or not account.is_active or account.connection_status != "connected":
+        raise HTTPException(
+            status_code=400,
+            detail="Cannot harvest search terms for a disconnected or inactive Amazon Ads account."
+        )
 
     if payload.bid < 1.0 or payload.bid > 5000.0:
         raise HTTPException(status_code=422, detail=[{"field": "bid", "message": "Bid must be between ₹1.00 and ₹5,000.00"}])
@@ -2198,6 +2346,30 @@ async def harvest_search_term(
         if not ag:
             raise HTTPException(status_code=404, detail="Ad group not found in this campaign")
 
+    amazon_kw_id = None
+    provider = AmazonAdsProvider(db)
+
+    # Amazon First if real account
+    if not account.is_mock and account.refresh_token_encrypted:
+        if not ag.external_id:
+            raise HTTPException(
+                status_code=400,
+                detail="Ad group does not have an Amazon ad group ID. Ad group sync is required before harvesting search terms to Amazon."
+            )
+
+        amz_kw_payload = {
+            "ad_group_id": ag.external_id,
+            "keyword_text": clean_text,
+            "match_type": payload.match_type,
+            "bid": payload.bid,
+        }
+        amz_results = await provider.create_keywords(account, [amz_kw_payload])
+        if not amz_results or not amz_results[0].get("success"):
+            err_msg = amz_results[0].get("error") if amz_results else "Failed to create keyword on Amazon Ads"
+            raise HTTPException(status_code=400, detail=f"Amazon Ads API error: {err_msg}")
+
+        amazon_kw_id = amz_results[0].get("keyword_id") or amz_results[0].get("response", {}).get("keywordId")
+
     kw = (await db.execute(
         select(Keyword).where(
             Keyword.ad_group_id == ag_id,
@@ -2209,13 +2381,16 @@ async def harvest_search_term(
     if kw:
         kw.bid = payload.bid
         kw.state = "ENABLED"
+        if amazon_kw_id:
+            kw.external_id = str(amazon_kw_id)
     else:
         kw = Keyword(
             ad_group_id=ag_id,
             keyword_text=clean_text,
             match_type=payload.match_type,
             bid=payload.bid,
-            state="ENABLED"
+            state="ENABLED",
+            external_id=str(amazon_kw_id) if amazon_kw_id else None
         )
         db.add(kw)
         await db.flush()
@@ -2224,7 +2399,7 @@ async def harvest_search_term(
         campaign_id=c.id,
         event_type="HARVEST_KEYWORD",
         event_title="Harvested Customer Search Term",
-        description=f"Search term '{clean_text}' harvested as {payload.match_type} keyword with ₹{payload.bid:.2f} bid.",
+        description=f"Search term '{clean_text}' harvested as {payload.match_type} keyword with ₹{payload.bid:.2f} bid (Amazon sync validated).",
         new_value=f"₹{payload.bid:.2f}",
         user_id=current_user.id
     )

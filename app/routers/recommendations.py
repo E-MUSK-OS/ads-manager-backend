@@ -124,6 +124,11 @@ async def trigger_run(
     current_user: User = Depends(get_current_user),
 ):
     account = await assert_owned_account(db, payload.ads_account_id, current_user)
+    if not account.is_active or account.connection_status != "connected":
+        raise HTTPException(
+            status_code=400,
+            detail="Cannot run recommendations for an inactive or disconnected ads account",
+        )
     result = await run_engine(db, account, rule_ids=payload.rule_ids, trigger="manual")
     return result
 

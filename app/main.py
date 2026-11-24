@@ -32,6 +32,45 @@ from app.core.exceptions import ServiceValidationError
 
 from fastapi.exceptions import RequestValidationError
 
+from fastapi import HTTPException
+from app.routers.amazon_ads import AmazonAdsException
+
+@app.exception_handler(AmazonAdsException)
+async def amazon_ads_exception_handler(request: Request, exc: AmazonAdsException):
+    headers = {}
+    origin = request.headers.get("origin")
+    if origin in origins:
+        headers = {"Access-Control-Allow-Origin": origin, "Access-Control-Allow-Credentials": "true", "Vary": "Origin"}
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={"success": False, "message": exc.message, "code": exc.code},
+        headers=headers,
+    )
+
+@app.exception_handler(HTTPException)
+async def http_exception_handler(request: Request, exc: HTTPException):
+    headers = {}
+    origin = request.headers.get("origin")
+    if origin in origins:
+        headers = {"Access-Control-Allow-Origin": origin, "Access-Control-Allow-Credentials": "true", "Vary": "Origin"}
+    path = request.url.path
+    if path.startswith("/amazon-ads") or path.startswith("/api/v1/amazon-ads"):
+        code = "UNAUTHORIZED" if exc.status_code in (401, 403) else (
+            "VALIDATION_ERROR" if exc.status_code in (400, 422) else (
+                "NOT_CONNECTED" if exc.status_code == 409 else "INTERNAL_ERROR"
+            )
+        )
+        return JSONResponse(
+            status_code=exc.status_code,
+            content={"success": False, "message": str(exc.detail), "code": code},
+            headers=headers,
+        )
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={"detail": exc.detail},
+        headers=headers,
+    )
+
 @app.exception_handler(RequestValidationError)
 async def request_validation_exception_handler(request: Request, exc: RequestValidationError):
     errors = []
@@ -43,6 +82,13 @@ async def request_validation_exception_handler(request: Request, exc: RequestVal
     origin = request.headers.get("origin")
     if origin in origins:
         headers = {"Access-Control-Allow-Origin": origin, "Access-Control-Allow-Credentials": "true", "Vary": "Origin"}
+    path = request.url.path
+    if path.startswith("/amazon-ads") or path.startswith("/api/v1/amazon-ads"):
+        return JSONResponse(
+            status_code=400,
+            content={"success": False, "message": "Invalid request parameters", "code": "VALIDATION_ERROR"},
+            headers=headers,
+        )
     return JSONResponse(
         status_code=422,
         content={"detail": errors},
@@ -74,7 +120,7 @@ async def unhandled_exception_handler(request: Request, exc: Exception):
         headers=headers
     )
 
-from app.routers import auth, ads_accounts, hourly, campaigns, ad_groups, keywords, search_terms, products, recommendation_rules, recommendations, contact
+from app.routers import auth, ads_accounts, hourly, campaigns, ad_groups, keywords, search_terms, products, recommendation_rules, recommendations, contact, amazon_ads
 
 app.include_router(auth.router)
 app.include_router(ads_accounts.router)
@@ -87,6 +133,8 @@ app.include_router(products.router)
 app.include_router(recommendation_rules.router)
 app.include_router(recommendations.router)
 app.include_router(contact.router)
+app.include_router(amazon_ads.router, prefix="/amazon-ads")
+app.include_router(amazon_ads.router, prefix="/api/v1/amazon-ads")
 # Startup event removed
 
 @app.get("/health")

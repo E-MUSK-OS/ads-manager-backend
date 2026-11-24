@@ -53,8 +53,10 @@ class Settings(BaseSettings):
     GOOGLE_OAUTH_CLIENT_ID: Optional[str] = None
 
     # Amazon Ads API / LWA
-    AMAZON_ADS_REGION: str = "eu"  # na | eu | fe. TODO(verify against official Amazon Ads API docs: verify region for India)
-    AMAZON_LWA_SCOPE: str = "advertising::campaign_management"  # TODO(verify against official Amazon Ads API docs)
+    AMAZON_ADS_REGION: str = "eu"  # India belongs to EU region: https://advertising.amazon.com/API/docs/en-us/guides/get-started/create-authorization-grant
+    AMAZON_LWA_SCOPE: str = "advertising::campaign_management"
+    AMAZON_OAUTH_STATE_TTL_MINUTES: int = 10
+    FRONTEND_BASE_URL: Optional[str] = None
     TOKEN_ENCRYPTION_KEY: Optional[str] = None
     AMAZON_LWA_CLIENT_ID: Optional[str] = None
     AMAZON_LWA_CLIENT_SECRET: Optional[str] = None
@@ -97,6 +99,17 @@ class Settings(BaseSettings):
     def supported_marketplaces(self) -> list[str]:
         return [m.strip().upper() for m in self.SUPPORTED_MARKETPLACES.split(",") if m.strip()]
 
+    @property
+    def frontend_base_url(self) -> str:
+        if self.ENVIRONMENT.lower() == "production":
+            effective = self.FRONTEND_BASE_URL or self.FRONTEND_URL
+            if not effective or effective.startswith("http://localhost") or effective.startswith("http://127.0.0.1"):
+                raise ValueError(
+                    "FRONTEND_BASE_URL must be configured with a public HTTPS URL in production (never fallback to localhost)"
+                )
+            return effective.rstrip("/")
+        return (self.FRONTEND_BASE_URL or self.FRONTEND_URL).rstrip("/")
+
     @model_validator(mode="after")
     def validate_production_and_amazon_config(self) -> "Settings":
         # Validate JWT_SECRET_KEY
@@ -119,6 +132,11 @@ class Settings(BaseSettings):
                     raise ValueError(f"FRONTEND_URL origin '{origin}' must start with 'https://' in production")
 
             missing = []
+            if not self.FRONTEND_BASE_URL:
+                missing.append("FRONTEND_BASE_URL")
+            elif not self.FRONTEND_BASE_URL.startswith("https://") or "localhost" in self.FRONTEND_BASE_URL:
+                raise ValueError("FRONTEND_BASE_URL must start with 'https://' in production (never localhost)")
+
             if not self.AMAZON_LWA_CLIENT_ID:
                 missing.append("AMAZON_LWA_CLIENT_ID")
             if not self.AMAZON_LWA_CLIENT_SECRET:

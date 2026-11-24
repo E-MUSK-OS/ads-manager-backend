@@ -1,4 +1,4 @@
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator, ConfigDict
 from typing import Optional, Literal
 from datetime import date, datetime
 import re
@@ -123,7 +123,7 @@ class StateUpdate(BaseModel):
 
 class BulkCampaignActionIn(BaseModel):
     ads_account_id: int | None = None
-    campaign_ids: list[int] = Field(default=[], alias="ids")
+    campaign_ids: list[int] = Field(default=[], alias="ids", max_length=100)
     action: Literal[
         "ENABLE", "PAUSE", "ARCHIVE",
         "BUDGET_SET", "BUDGET_INCREASE_PCT", "BUDGET_DECREASE_PCT",
@@ -136,8 +136,7 @@ class BulkCampaignActionIn(BaseModel):
     min_budget_floor: float | None = None
     max_budget_cap: float | None = None
 
-    class Config:
-        populate_by_name = True
+    model_config = ConfigDict(populate_by_name=True)
 
 BulkActionRequest = BulkCampaignActionIn
 
